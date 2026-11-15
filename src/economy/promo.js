@@ -1,0 +1,35 @@
+// CranGuys — promo codes. The game only stores a fingerprint of each code (so the codes aren't readable in the
+// page source); keep the codes themselves out of this public repo. To add one: work out its fingerprint with
+// `node tools/promo-key.mjs THECODE` and add it below with what it gives.
+import { hashStr } from '../sim/math.js';
+const cleanPromo = (code) => String(code || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 24);
+const promoKey = (code) => hashStr('cranguys-promo-v1:' + cleanPromo(code)).toString(36);
+
+// fingerprint -> reward. items: catalog ids to unlock (the first one is shown big); berries / crowns: currency to
+// add; wear: the outfit "Wear it now" puts on (defaults to the first item).
+const PROMOS = {
+  o3pqbg: { items: ['h_builder'], title: 'Builder’s Hat', note: 'An exclusive hard hat for builders only!' },
+  '12tqbeo': { items: ['h_balaclava', 't_owner'], title: 'Owner pack', note: 'You’re the owner! An OWNER tag now shows next to your name in every lobby — and here’s an exclusive pink balaclava.' },
+  '1uu26vv': { items: ['h_dino', 'c_dino'], title: 'Dino Jay', wear: { color: 'c_dino', color2: 'c_lime', pattern: 'p_fade', face: 'f_happy', hat: 'h_dino' }, note: 'Rawr! Dino Jay is yours: an exclusive dino hood with spikes and teeth, plus Dino Green.' },
+  '15850b1': { items: ['h_knight'], title: 'Golden Knight Helmet', note: 'Arise, Sir Bean! A shining golden knight helmet with an eye slit and a red plume — promo code only.' },
+  aw5ghx: { items: ['h_bikehelmet'], title: 'White Ski Mask', note: 'Fresh powder! A snowy-white knitted ski mask with ice-blue stripes and a snowflake badge — promo code only.' },
+  kaqxn1: { items: ['h_cape'], title: 'Royal Red Cape', note: 'A royal red velvet cape, tied round your neck with a bow and a gold-trimmed collar. Promo code only.' },
+  '93nqej': { items: ['h_balaclava'], title: 'Pink Balaclava', note: 'The pink balaclava — knitted, full-face, with eye and mouth holes. Promo code only.' },
+  '148fu86': { items: ['h_footface'], title: 'Foot Face', note: 'Your head is now a foot. Toes, toenails, a plaster and an ankle sock. You’re welcome.' },
+  p2d1l: { items: ['h_heist'], title: 'Heist Mask', note: 'A sly white mask with a painted grin and a gold tooth, under a black cap. Promo code only.' },
+  // the ten "secret" codes
+  '1fgrwze': { items: ['h_frog'], title: 'Frog Hat', note: 'Ribbit! A goggle-eyed frog hat. Only ten secret codes exist — this is one.' },
+  vpmwuu: { items: ['h_witch'], title: 'Witch Hat', note: 'A crooked witch hat with a buckle. Secret code only!' },
+  '7vjyy': { items: ['h_sundae'], title: 'Sundae Scoop', note: 'Three scoops, sprinkles and a cherry on top. Secret code only!' },
+  l6wbxa: { items: ['h_jester'], title: 'Jester Hat', note: 'A floppy three-pronged jester hat with jingly gold bells. Secret code only!' },
+  '8gm57': { items: ['h_unicorn'], title: 'Unicorn Horn', note: 'A pearly unicorn horn with a rainbow mane down the back. Secret code only!' },
+  a4poet: { items: ['h_toadstool'], title: 'Toadstool Cap', note: 'A spotty red toadstool cap. Secret code only!' },
+  negkw0: { items: ['h_pumpkin'], title: 'Pumpkin Head', note: 'A glowing jack-o’-lantern head. Secret code only!' },
+  q8zqgs: { items: ['h_gradcap'], title: 'Graduation Cap', note: 'Class of CranGuys! A mortarboard with a gold tassel. Secret code only!' },
+  '1kui1m4': { items: ['h_duck'], title: 'Rubber Duck', note: 'A rubber duck riding on your head. Quack! Secret code only!' },
+  '1p5y30a': { items: ['h_ufo'], title: 'Mini UFO', note: 'A tiny glowing flying saucer hovering over you. Secret code only!' },
+};
+const promoFor = (code) => PROMOS[promoKey(code)] || null;
+
+
+export { cleanPromo, promoKey, PROMOS, promoFor };

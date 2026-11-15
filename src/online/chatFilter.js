@@ -1,0 +1,90 @@
+// CranGuys chat auto-moderation — shared by the host (which decides what gets through) and every player
+// (who filters incoming messages again, so a modified host can't push anything nasty to you).
+// Blocks swearing, slurs and sexual words (with leetspeak/spacing tricks folded away), anything that looks like
+// personal info (links, emails, phone numbers, socials, "how old are you", "where do you live"…), and spam.
+// Word lists are ROT13-encoded so this file stays readable.
+const R13 = (s) => s.replace(/[a-z]/g, (c) => String.fromCharCode(((c.charCodeAt(0) - 97 + 13) % 26) + 97));
+const STRONG = ["shpx", "fuvg", "ovgpu", "phag", "avttre", "avttn", "snttbg", "snt", "juber", "fyhg", "onfgneq", "qvpxurnq", "jnaxre", "gjng", "zbgureshpx", "ergneq", "cbea", "cravf", "intvan", "chffl", "obbof", "qvyqb", "oybjwbo", "unaqwbo", "wvmm", "zbyrfg", "anmv", "uvgyre", "xvyylbhefrys", "fhvpvqr", "ahqr", "frkl", "ubeal", "fcnfgvp", "obyybpx", "nefrubyr", "nffubyr", "ohyyfuvg"].map(R13);
+const WORD = new Set(["nff", "nefr", "qvpx", "gvg", "gvgf", "phz", "frk", "ubr", "ubrf", "cevpx", "xabo", "fynt", "fxnax", "gubg", "fvzc", "fgsh", "jgs", "sx", "spx", "shx", "fzq", "yzsnb", "bzst", "xlf", "pbpx", "encr", "encrq", "encvfg", "crqb", "cnrqb", "fcvp", "pbba", "cnxv", "tbbx", "puvax", "qlxr", "xvxr", "genaal", "jrgonpx", "ornare", "cvff", "cvffrq", "cvffvat"].map(R13));
+const MILD = new Set(["qnza", "penc", "uryy", "sevpx", "urpx", "qnat", "fghcvq", "vqvbg", "qhzo", "ybfre", "htyl", "genfu", "fhpx", "fhpxf", "abbo", "fuhg hc"].map(R13));
+const ALLOW = ["scunthorpe", "shitake", "shiitake", "cocktail", "cockpit", "peacock", "hancock", "pissarro", "penistone", "cassette", "dickens"]; // innocent words that contain a blocked one
+const QUICK = ['GG!', 'Good luck!', 'Nice one!', 'Let’s go!', 'Wait for me!', 'Follow me!', 'Oops!', 'Thanks!', 'So close!', 'Rematch?', '😂', '👑'];
+const CHAT_MAX = 80;
+
+const LEET = { '0': 'o', '1': 'i', '!': 'i', '|': 'i', '3': 'e', '4': 'a', '@': 'a', '5': 's', '$': 's', '7': 't', '+': 't', '8': 'b', '9': 'g', '2': 'z', '€': 'e', '¡': 'i' };
+const fold = (s) => s.toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f\u200b-\u200f\u2060\ufeff]/g, '');
+const deleet = (s) => s.replace(/[0-9!|@$+€¡]/g, (c) => LEET[c] || c);
+const squash = (s) => s.replace(/(.)\1+/g, '$1'); // fuuuuck -> fuck
+const STRONG_SQ = STRONG.map(squash);
+
+const PERSONAL = [
+  /\S+@\S+\.[a-z]{2,}/i,                                                  // email
+  /(https?:\/\/|www\.)/i,                                                     // links
+  /\b[a-z0-9-]{2,}\s*(\.|dot)\s*(com|net|org|io|gg|co|uk|me|tv|app|xyz|ly|ru|de|fr)\b/i,
+  /(\d[\s.\-()]*){7,}/,                                                      // phone numbers
+  /(^|\s)@[a-z0-9_.]{3,}/i,                                                   // @handles
+  /\b(snap ?chat|snap|insta(gram)?|discord|tik ?tok|whats ?app|telegram|kik|facebook|fb|twitter|roblox user|xbox gamertag|psn)\b/i,
+  /\b(my|ur|your|you'?r|whats? ?(is )?(ur|your)) ?(phone|number|digits|address|house|postcode|zip ?code|school|real name|surname|last name|age|birthday|location|user ?name|username|pass ?word|password)\b/i,
+  /\b(where (do|d) (you|u) live|where (are|r) (you|u) from|where (are|r) (you|u)|wru|how old|what age|asl|which school|what school|meet (up|me)|irl|dm me|add me|text me|call me|send (me )?(pic|photo)s?)\b/i,
+];
+
+// Returns { ok, text, reason, strike }. reason: 'empty' | 'long' | 'repeat' | 'personal' | 'rude'
+function moderate(raw, o = {}) {
+  let text = String(raw ?? '').replace(/[\u0000-\u001f\u007f<>]/g, '').replace(/\s+/g, ' ').trim();
+  if (!text) return { ok: false, reason: 'empty' };
+  if (text.length > CHAT_MAX) text = text.slice(0, CHAT_MAX).trim();
+  const f = fold(text);
+  if (o.last && fold(o.last) === f) return { ok: false, reason: 'repeat' };
+  for (const re of PERSONAL) if (re.test(f) || re.test(deleet(f))) return { ok: false, reason: 'personal' };
+  const d = deleet(f);
+  const rawTokens = d.split(/[^a-z]+/).filter(Boolean);
+  let glued = squash(d.replace(/[^a-z]/g, '')); // f u c k / f.u.c.k
+  for (const a of ALLOW) glued = glued.split(squash(a)).join('_');
+  if (STRONG_SQ.some((w) => glued.includes(w))) return { ok: false, reason: 'rude', strike: true };
+  const isWord = (t) => WORD.has(t) || WORD.has(t.replace(/(.)\1{2,}/g, '$1$1')) || (squash(t).length >= 4 && WORD.has(squash(t)));
+  if (rawTokens.some(isWord)) return { ok: false, reason: 'rude', strike: true };
+  // spelled out letter by letter: "a s s", "k y s"
+  const parts = d.split(/[^a-z]+/).filter(Boolean); let run = '';
+  for (const x of [...parts, '##']) { if (x.length === 1) run += x; else { if (run.length >= 2 && (isWord(run) || STRONG_SQ.some((w) => squash(run).includes(w)))) return { ok: false, reason: 'rude', strike: true }; run = ''; } }
+  // mild words are just starred out
+  text = text.replace(/[a-z0-9!@$|+]+/gi, (w) => (MILD.has(squash(deleet(fold(w)))) || MILD.has(deleet(fold(w))) ? '★'.repeat(Math.min(4, w.length)) : w));
+  // SHOUTING -> calm
+  const letters = text.replace(/[^a-z]/gi, ''); if (letters.length > 6 && letters.replace(/[^A-Z]/g, '').length / letters.length > 0.7) text = text.toLowerCase();
+  return { ok: true, text };
+}
+const CHAT_REASON = {
+  rude: 'Message blocked — keep it friendly!', personal: 'Message blocked — never share personal info (socials, links, numbers, age, where you live).',
+  repeat: 'You just said that!', slow: 'Slow down a little!', muted: 'You’re muted for the rest of this show.', empty: '', long: '',
+};
+
+// Gamertags get the same auto-moderation as chat, but stricter: a name that would need any word starred out,
+// looks like personal info, or pretends to be staff is refused outright (names are shown to everyone, and on
+// the global leaderboard). Returns { ok, name } or { ok: false, reason, msg }.
+const NAME_MSG = {
+  short: 'Names need 2–16 letters or numbers',
+  rude: 'That name isn’t allowed — pick something friendly!',
+  personal: 'Names can’t include personal info (socials, numbers, where you live…).',
+  staff: 'Names can’t pretend to be CranGuys staff.',
+};
+const STAFF = /\b(admin|administrator|moderator|mod|official|staff|dev|developer|support|cranguys ?team|owner)\b/i;
+function cleanName(raw) {
+  const name = String(raw ?? '').replace(/[^\p{L}\p{N}_ .-]/gu, '').replace(/\s+/g, ' ').trim().slice(0, 16);
+  if (name.replace(/[^\p{L}\p{N}]/gu, '').length < 2) return { ok: false, reason: 'short', msg: NAME_MSG.short };
+  const bad = (m) => ({ ok: false, reason: m.reason === 'personal' ? 'personal' : 'rude', msg: m.reason === 'personal' ? NAME_MSG.personal : NAME_MSG.rude });
+  const whole = moderate(name); if (!whole.ok && whole.reason === 'personal') return bad(whole);
+  // plain numbers (Bean2012, mochi4555) are numbers, not leetspeak; the letters around them are what get checked
+  const words = name.replace(/\p{N}{3,}/gu, ' ').replace(/\s+/g, ' ').trim();
+  const spaced = words.replace(/[_.-]+/g, ' ').replace(/(\p{Ll})(\p{Lu})/gu, '$1 $2').replace(/(\p{L})(\p{N})/gu, '$1 $2').trim(); // JellyBean -> Jelly Bean
+  for (const w of [words, spaced]) {
+    if (!w) continue;
+    const m = moderate(w); if (!m.ok) return bad(m);
+    if (m.text.toLowerCase() !== w.toLowerCase()) return { ok: false, reason: 'rude', msg: NAME_MSG.rude }; // something got starred out
+  }
+  if (STAFF.test(spaced) || STAFF.test(name.replace(/[^a-z]/gi, ' '))) return { ok: false, reason: 'staff', msg: NAME_MSG.staff };
+  return { ok: true, name };
+}
+// For names arriving from other players (P2P hello, leaderboard): never throw, just fall back to a safe name.
+const safeName = (raw, fallback = 'Bean') => { const c = cleanName(raw); return c.ok ? c.name : fallback; };
+
+
+export { QUICK, CHAT_MAX, moderate, CHAT_REASON, NAME_MSG, cleanName, safeName };

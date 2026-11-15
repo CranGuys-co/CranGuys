@@ -1,0 +1,101 @@
+// CranGuys — shared math helpers (isomorphic: Node server + browser client)
+
+const clamp = (x, a, b) => (x < a ? a : x > b ? b : x);
+const lerp = (a, b, t) => a + (b - a) * t;
+const smooth = (t) => t * t * (3 - 2 * t);
+const damp = (a, b, k, dt) => lerp(a, b, 1 - Math.exp(-k * dt));
+const TAU = Math.PI * 2;
+const wrapPi = (a) => { a = (a + Math.PI) % TAU; if (a < 0) a += TAU; return a - Math.PI; };
+const angLerp = (a, b, t) => a + wrapPi(b - a) * t;
+const angTowards = (a, b, step) => { const d = wrapPi(b - a); return Math.abs(d) <= step ? b : a + Math.sign(d) * step; };
+const sign = (x) => (x < 0 ? -1 : 1);
+
+// ---- vec3 (plain arrays) ----
+const v3 = {
+  make: (x = 0, y = 0, z = 0) => [x, y, z],
+  copy: (o, a) => { o[0] = a[0]; o[1] = a[1]; o[2] = a[2]; return o; },
+  set: (o, x, y, z) => { o[0] = x; o[1] = y; o[2] = z; return o; },
+  add: (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]],
+  sub: (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]],
+  scale: (a, s) => [a[0] * s, a[1] * s, a[2] * s],
+  madd: (a, b, s) => [a[0] + b[0] * s, a[1] + b[1] * s, a[2] + b[2] * s],
+  dot: (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2],
+  cross: (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]],
+  len: (a) => Math.hypot(a[0], a[1], a[2]),
+  dist: (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]),
+  distXZ: (a, b) => Math.hypot(a[0] - b[0], a[2] - b[2]),
+  norm: (a) => { const l = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / l, a[1] / l, a[2] / l]; },
+  lerp: (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t],
+};
+
+// ---- quaternions [x,y,z,w] ----
+const qt = {
+  ident: () => [0, 0, 0, 1],
+  axis: (ax, ang) => { const s = Math.sin(ang / 2), l = Math.hypot(ax[0], ax[1], ax[2]) || 1; return [ax[0] / l * s, ax[1] / l * s, ax[2] / l * s, Math.cos(ang / 2)]; },
+  yaw: (a) => [0, Math.sin(a / 2), 0, Math.cos(a / 2)],
+  mul: (a, b) => [
+    a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1],
+    a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0],
+    a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3],
+    a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2],
+  ],
+  rot: (q, v) => {
+    const [x, y, z, w] = q, [vx, vy, vz] = v;
+    const ix = w * vx + y * vz - z * vy, iy = w * vy + z * vx - x * vz, iz = w * vz + x * vy - y * vx, iw = -x * vx - y * vy - z * vz;
+    return [ix * w + iw * -x + iy * -z - iz * -y, iy * w + iw * -y + iz * -x - ix * -z, iz * w + iw * -z + ix * -y - iy * -x];
+  },
+  norm: (q) => { const l = Math.hypot(q[0], q[1], q[2], q[3]) || 1; return [q[0] / l, q[1] / l, q[2] / l, q[3] / l]; },
+  slerp: (a, b, t) => {
+    let [bx, by, bz, bw] = b; let c = a[0] * bx + a[1] * by + a[2] * bz + a[3] * bw;
+    if (c < 0) { c = -c; bx = -bx; by = -by; bz = -bz; bw = -bw; }
+    if (c > 0.9995) return qt.norm([a[0] + (bx - a[0]) * t, a[1] + (by - a[1]) * t, a[2] + (bz - a[2]) * t, a[3] + (bw - a[3]) * t]);
+    const th = Math.acos(c), s = Math.sin(th), wa = Math.sin((1 - t) * th) / s, wb = Math.sin(t * th) / s;
+    return [a[0] * wa + bx * wb, a[1] * wa + by * wb, a[2] * wa + bz * wb, a[3] * wa + bw * wb];
+  },
+  fromTo: (a, b) => { // shortest arc between unit vectors
+    const d = v3.dot(a, b);
+    if (d < -0.9999) { const ax = Math.abs(a[0]) < 0.9 ? v3.cross(a, [1, 0, 0]) : v3.cross(a, [0, 1, 0]); return qt.axis(ax, Math.PI); }
+    const c = v3.cross(a, b); return qt.norm([c[0], c[1], c[2], 1 + d]);
+  },
+};
+
+// ---- 3x3 rotation matrices (row-major, 9 floats) ----
+function quatToMat(q, m = new Array(9)) {
+  const [x, y, z, w] = q, x2 = x + x, y2 = y + y, z2 = z + z;
+  const xx = x * x2, xy = x * y2, xz = x * z2, yy = y * y2, yz = y * z2, zz = z * z2, wx = w * x2, wy = w * y2, wz = w * z2;
+  m[0] = 1 - (yy + zz); m[1] = xy - wz; m[2] = xz + wy;
+  m[3] = xy + wz; m[4] = 1 - (xx + zz); m[5] = yz - wx;
+  m[6] = xz - wy; m[7] = yz + wx; m[8] = 1 - (xx + yy);
+  return m;
+}
+function axisMat(ax, ang, m = new Array(9)) {
+  const c = Math.cos(ang), s = Math.sin(ang), t = 1 - c, [x, y, z] = ax;
+  m[0] = t * x * x + c; m[1] = t * x * y - s * z; m[2] = t * x * z + s * y;
+  m[3] = t * x * y + s * z; m[4] = t * y * y + c; m[5] = t * y * z - s * x;
+  m[6] = t * x * z - s * y; m[7] = t * y * z + s * x; m[8] = t * z * z + c;
+  return m;
+}
+function matMul(a, b, o = new Array(9)) {
+  const r = new Array(9);
+  for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) r[i * 3 + j] = a[i * 3] * b[j] + a[i * 3 + 1] * b[3 + j] + a[i * 3 + 2] * b[6 + j];
+  for (let i = 0; i < 9; i++) o[i] = r[i];
+  return o;
+}
+const mv = (m, v, o = [0, 0, 0]) => { const x = v[0], y = v[1], z = v[2]; o[0] = m[0] * x + m[1] * y + m[2] * z; o[1] = m[3] * x + m[4] * y + m[5] * z; o[2] = m[6] * x + m[7] * y + m[8] * z; return o; };
+const mtv = (m, v, o = [0, 0, 0]) => { const x = v[0], y = v[1], z = v[2]; o[0] = m[0] * x + m[3] * y + m[6] * z; o[1] = m[1] * x + m[4] * y + m[7] * z; o[2] = m[2] * x + m[5] * y + m[8] * z; return o; };
+const IDM = () => [1, 0, 0, 0, 1, 0, 0, 0, 1];
+
+// ---- deterministic RNG ----
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return function () {
+    a = (a + 0x6d2b79f5) >>> 0; let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+function hashStr(s) { let h = 2166136261 >>> 0; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return h >>> 0; }
+const pick = (rng, arr) => arr[Math.floor(rng() * arr.length) % arr.length];
+
+
+export { clamp, lerp, smooth, damp, TAU, wrapPi, angLerp, angTowards, sign, v3, qt, quatToMat, axisMat, matMul, mv, mtv, IDM, mulberry32, hashStr, pick };

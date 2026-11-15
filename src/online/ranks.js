@@ -1,0 +1,127 @@
+// CranGuys — Ranked: tiers, Ranked Points (RP) and how a duel or a ranked show moves them.
+// Everything here is pure so the host, the guests and the tests all agree on the maths. Each player's RP lives
+// on their own device (there is no server), so the host only reports *what happened* (who won, your place,
+// your opponents' RP) and every device works out its own new rank from that.
+import { clamp } from '../sim/math.js';
+// Bronze → Diamond have three divisions each (I is the lowest, III the highest), 100 RP apart.
+const TIERS = [
+  { id: 'bronze', name: 'Bronze', divs: 3, min: 0, c: ['#ffcf9e', '#d0803f', '#7a3f14'] },
+  { id: 'silver', name: 'Silver', divs: 3, min: 300, c: ['#ffffff', '#b9c6d8', '#5b6a82'] },
+  { id: 'gold', name: 'Gold', divs: 3, min: 600, c: ['#fff6b0', '#ffc928', '#a86a00'] },
+  { id: 'platinum', name: 'Platinum', divs: 3, min: 900, c: ['#dcfff8', '#45d6c0', '#0f6f69'] },
+  { id: 'diamond', name: 'Diamond', divs: 3, min: 1200, c: ['#eaf6ff', '#5fb0ff', '#1d3fbf'] },
+  { id: 'elite', name: 'Elite', divs: 1, min: 1500, c: ['#f4d9ff', '#b45cff', '#4b138f'] },
+  { id: 'champion', name: 'Champion', divs: 1, min: 1800, c: ['#ffe0d6', '#ff4d5e', '#7d0b2a'] },
+  { id: 'unreal', name: 'Unreal', divs: 1, min: 2200, c: ['#ffffff', '#ff7af6', '#5a2bff'] },
+];
+const ROMAN = ['I', 'II', 'III'];
+const DIV_RP = 100;
+const RANK_COUNT = TIERS.reduce((n, t) => n + t.divs, 0); // 18 ranks
+const UNREAL_RP = TIERS[TIERS.length - 1].min;
+const MIN_SHOW_HUMANS = 5;  // a ranked show needs at least this many real players
+const DUEL_WINS = 3;        // a duel is first to 3 round wins...
+const DUEL_ROUNDS = 7;      // ...and draws can stretch it, never past 7 rounds
+
+// Every rank in order, with the RP where it starts and where the next one starts.
+const RANKS = (() => {
+  const out = [];
+  TIERS.forEach((t, ti) => {
+    for (let d = 0; d < t.divs; d++) {
+      const min = t.min + d * DIV_RP;
+      const next = t.divs > 1 && d < t.divs - 1 ? min + DIV_RP : TIERS[ti + 1] ? TIERS[ti + 1].min : null;
+      out.push({ idx: out.length, tier: t.id, tierIdx: ti, tierName: t.name, div: t.divs > 1 ? d + 1 : 0, name: t.divs > 1 ? `${t.name} ${ROMAN[d]}` : t.name, min, next, c: t.c });
+    }
+  });
+  return out;
+})();
+
+function rankOf(rp) {
+  rp = Math.max(0, rp | 0);
+  let r = RANKS[0];
+  for (const k of RANKS) if (rp >= k.min) r = k;
+  const pct = r.next == null ? 1 : clamp((rp - r.min) / (r.next - r.min), 0, 1);
+  return { ...r, rp, pct, toNext: r.next == null ? 0 : r.next - rp };
+}
+const isUnreal = (rp) => (rp | 0) >= UNREAL_RP;
+
+// Elo-style: beating someone better than you is worth more than beating someone worse.
+const expect = (me, them) => 1 / (1 + Math.pow(10, (them - me) / 400));
+
+// A 1v1 duel. score: 1 win, 0.5 draw, 0 loss. Climbing is meant to feel quick: wins are worth a lot,
+// losses only sting a little, and the rank you are in protects you (see applyDelta).
+function duelDelta(me, opp, score) {
+  const d = 70 * (score - expect(me, opp));
+  if (score === 1) return clamp(Math.round(d) + 10, 28, 60); // every win is a big step (about 3 wins a division)
+  if (score === 0) return clamp(Math.round(d * 0.4), -15, -5); // a loss costs far less than a win gives
+  return Math.max(4, Math.round(d * 0.5));                    // a draw nudges you up
+}
+// A ranked show: place among the real players (1 = crown). Bots don't count.
+function showDelta(me, avgOthers, place, of, crowned = false) {
+  if (of < 2) return 0;
+  const S = (of - place) / (of - 1);
+  let v = Math.round(80 * (S - expect(me, avgOthers)));
+  if (place <= Math.ceil(of / 2)) v = Math.max(15 + Math.round(25 * S), v); // top half always climbs, the higher the better
+  else v = clamp(Math.round(v * 0.4), -12, -3);                           // bottom half: a small dip
+  if (crowned) v += 25;                                                    // won the whole show
+  return v;
+}
+// Gentle on the way down: Bronze and Silver only lose half, and a loss never knocks you out of the
+// tier you've reached (Gold stays Gold, Diamond stays Diamond — you can only slip back a division).
+function applyDelta(rp, delta) {
+  rp = Math.max(0, rp | 0);
+  if (delta >= 0) return rp + delta;
+  if (rp < TIERS[2].min) delta = Math.trunc(delta / 2);
+  const floor = rankOf(rp).tierIdx ? TIERS[rankOf(rp).tierIdx].min : 0;
+  return Math.max(floor, rp + delta);
+}
+
+// What the host tells each player about a ranked result (checked again on the receiving end).
+function cleanRanked(r) {
+  if (!r || typeof r !== 'object') return null;
+  const n = (x, lo, hi) => clamp(Number.isFinite(+x) ? Math.round(+x) : 0, lo, hi);
+  if (r.kind === 'duel') return { kind: 'duel', opp: n(r.opp, 0, 99999), res: r.res === 1 ? 1 : r.res === 0.5 ? 0.5 : 0, score: [n(r.score && r.score[0], 0, 9), n(r.score && r.score[1], 0, 9)], oppName: String(r.oppName || '').slice(0, 16) };
+  if (r.kind === 'show') { const of = n(r.of, 2, 60); return { kind: 'show', place: n(r.place, 1, of), of, avg: n(r.avg, 0, 99999), w: r.w ? 1 : 0 }; }
+  return null;
+}
+// The player's own device: fold a ranked result into their profile. Returns the change for the rewards screen.
+// If a provisional loss was booked for this match when it started (see rankedBook), it is undone first.
+function rankedUpdate(profile, r, mid) {
+  r = cleanRanked(r); if (!r) return null;
+  const pend = profile.rkPending;
+  if (pend && (!mid || pend.mid === mid)) { profile.rp = Math.max(0, pend.from | 0); profile.rkPending = null; }
+  if (mid) profile.rkLast = String(mid).slice(0, 40);
+  const from = Math.max(0, profile.rp | 0);
+  const delta = r.kind === 'duel' ? duelDelta(from, r.opp, r.res) : showDelta(from, r.avg, r.place, r.of, !!r.w);
+  const to = applyDelta(from, delta);
+  profile.rp = to; profile.rpPeak = Math.max(profile.rpPeak | 0, to);
+  profile.rkPlayed = (profile.rkPlayed | 0) + 1;
+  if (r.kind === 'duel') { if (r.res === 1) profile.duelW = (profile.duelW | 0) + 1; else if (r.res === 0) profile.duelL = (profile.duelL | 0) + 1; }
+  else if (r.w) profile.rkWins = (profile.rkWins | 0) + 1;
+  const a = rankOf(from), b = rankOf(to);
+  return { kind: r.kind, from, to, delta: to - from, rankFrom: a.name, rankTo: b.name, up: b.idx > a.idx, down: b.idx < a.idx, unreal: b.tier === 'unreal' && a.tier !== 'unreal', place: r.place, of: r.of, res: r.res, score: r.score, oppName: r.oppName };
+}
+
+// Anti rage-quit: the moment a ranked match really starts, the device books it as a loss. Finishing the
+// match (win, lose or draw) replaces that with the real result; closing or refreshing the page mid-match
+// just leaves the loss in place. Returns true if something was booked.
+function rankedBook(profile, mid, kind, oppRp) {
+  mid = String(mid || '').slice(0, 40);
+  if (!mid || profile.rkLast === mid || (profile.rkPending && profile.rkPending.mid === mid)) return false; // already booked / already decided
+  rankedSettle(profile);                                       // an older match that never finished counts as lost
+  const from = Math.max(0, profile.rp | 0);
+  const loss = kind === 'duel' ? duelDelta(from, oppRp | 0, 0) : showDelta(from, oppRp | 0, 2, 2, false);
+  profile.rkPending = { mid, from, kind: kind === 'duel' ? 'duel' : 'show', at: Date.now() };
+  profile.rp = applyDelta(from, loss);
+  return true;
+}
+// A booked match whose result never came back (the page was closed or refreshed): make the loss official.
+function rankedSettle(profile) {
+  const pend = profile.rkPending; if (!pend) return null;
+  profile.rkPending = null;
+  profile.rkPlayed = (profile.rkPlayed | 0) + 1;
+  if (pend.kind === 'duel') profile.duelL = (profile.duelL | 0) + 1;
+  return { from: pend.from | 0, to: profile.rp | 0 };
+}
+
+
+export { TIERS, DIV_RP, RANK_COUNT, UNREAL_RP, MIN_SHOW_HUMANS, DUEL_WINS, DUEL_ROUNDS, RANKS, rankOf, isUnreal, duelDelta, showDelta, applyDelta, cleanRanked, rankedUpdate, rankedBook, rankedSettle };
