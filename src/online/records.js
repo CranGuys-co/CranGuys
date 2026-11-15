@@ -1,0 +1,5 @@
+// World records: the maps that have one, and the fastest time (seconds) a bean could physically manage on each.
+// Shared by the game and the server (supabase/functions/cg-api), which ignore anything faster.
+const REC_MAPS = { whirlway: 17, hammerhills: 12, trusttiles: 13, slimesurge: 22, jumprope: 14, redlight: 12, crownpeak: 12 }; // min seconds
+
+export { REC_MAPS };

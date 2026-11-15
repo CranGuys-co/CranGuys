@@ -11,7 +11,10 @@ import { RemoteConn, LocalServer } from './online/net.js';
 import { P2PHost, P2PClient, findPublicRoom, newCode, cleanCode, p2pSupported, lbFetch, lbPublish, Presence, recFetch, recPublish, REC_MAPS } from './online/p2p.js';
 import { isUnreal, rankOf } from './online/ranks.js';
 import { Chat } from './ui/chatUI.js';
-import { RemoteBackend, LocalBackend } from './online/api.js';
+import { RemoteBackend } from './online/api.js';
+import { CloudBackend } from './online/cloud/backend.js';
+import { cloudOn } from './online/cloud/config.js';
+import { top as cloudTop, records as cloudRecords, CloudPresence } from './online/cloud/board.js';
 import { BeanVis } from './render/bean.js';
 import { BotBrain } from './sim/bots.js';
 import { watchIcons } from './ui/icons.js';
@@ -68,7 +71,9 @@ class App {
     addEventListener('pointerup', () => (drag = null));
 
     // backends: offline always available; online if a CranGuys server answers
-    this.local = new LocalBackend(); await this.local.init();
+    // your save: this device's guest save, or your account once you sign in (src/online/cloud/backend.js)
+    this.local = new CloudBackend(); await this.local.init();
+    this.local.on((p, info) => this.onAccount(p, info));
     this.watchForUpdates();
     if (this.local.settled) setTimeout(() => this.ui.toast(`Your last ranked match didn’t finish — it counts as a loss (${this.local.settled.to - this.local.settled.from} RP).`, 'bad'), 1500);
     const base = settings.server || (location.protocol.startsWith('http') ? location.origin : '');
@@ -118,7 +123,7 @@ class App {
     } else this.ui.setStatus(this.idleStatus());
   }
   idleStatus() {
-    return this.mode === 'offline' ? 'Solo · 59 bots ready' : this.mode === 'friends' ? 'Create a room or type a code' : this.mode === 'ranked' ? (this.rankKind === 'duel' ? '1v1 · real players only' : `Ranked · needs 5+ real players`) : this.onlineOK ? 'Connected' : 'Online · real players + bots';
+    return this.mode === 'offline' ? 'Solo · 59 bots ready' : this.mode === 'friends' ? 'Create a room or type a code' : this.mode === 'ranked' ? (this.needsAccount() ? 'Sign in to play Ranked' : this.rankKind === 'duel' ? '1v1 · real players only' : `Ranked · needs 5+ real players`) : this.onlineOK ? 'Connected' : 'Online · real players + bots';
   }
   closeConn() { const c = this.conn; this.conn = null; if (c) { try { c.close(); } catch {} } }
   // ---------------- peer-to-peer play (no server needed) ----------------
@@ -160,6 +165,7 @@ class App {
   }
   // Ranked: find a public room of the same kind (duels take anyone, whatever their rank), or open one and wait
   async rankedPlay() {
+    if (this.needsAccount()) { this.ui.toast('Sign in to play Ranked — your rank is saved to your account.', 'info'); this.ui.accountModal(); return; }
     const kind = this.rankKind, token = (this.searchToken = {});
     this.state = 'searching'; this.ui.setSearching(true, kind === 'duel' ? 'Looking for an opponent — anyone, any rank…' : 'Looking for a ranked show…');
     try {
@@ -172,8 +178,11 @@ class App {
   // ---------- live counts & world records (both ride on the public brokers) ----------
   startLive() {
     if (!this.p2pOK) return;
-    this.presence = new Presence((c) => { this.counts = c; this.ui.playerCounts(c); });
-    this.presence.start();
+    const counts = (c) => { this.counts = c; this.ui.playerCounts(c); };
+    if (cloudOn()) { // counted by the database (falls back to the brokers if Supabase can't be reached)
+      this.presence = new CloudPresence(counts);
+      this.presence.start().catch(() => { this.presence = new Presence(counts); this.presence.start(); });
+    } else { this.presence = new Presence(counts); this.presence.start(); }
     addEventListener('visibilitychange', () => this.presence && this.presence.pause(document.hidden));
     addEventListener('pagehide', () => this.presence && this.presence.beat(true));
     setInterval(() => this.updatePresence(), 2000);
@@ -189,11 +198,12 @@ class App {
     this.presence.set(m);
   }
   async loadRecords() {
-    try { const r = await recFetch(); this.records = r; this.ui.recordsChanged(); } catch (e) { /* offline */ }
+    try { const r = cloudOn() ? await cloudRecords() : await recFetch(); this.records = r; this.ui.recordsChanged(); } catch (e) { /* offline */ }
   }
   // my bean just finished a race / grabbed the crown: personal best, and maybe a world record
   async onFinishTime(levelId, ms) {
     const id = String(levelId).split(':')[0]; if (!REC_MAPS[id] || ms < REC_MAPS[id] * 1000) return;
+    if (cloudOn()) return this.onFinishTimeCloud(id, ms);
     const pb = this.local.personalBest(id, ms);
     const cur = this.records && this.records.get(id);
     if (cur && cur.t <= ms) { if (pb) this.ui.feed(`New personal best: ${fmtTime(ms)}!`, 'good'); return; }
@@ -204,10 +214,25 @@ class App {
       const p = this.local.profile, look = beanLook(p.loadout);
       await recPublish(id, { n: p.name, t: ms, c: String(look.css).startsWith('#') ? look.css : '#ff7af6', tg: tagOf(p.owned) });
       this.records.set(id, { id, n: p.name, t: ms, c: look.css, tg: tagOf(p.owned), at: Date.now() });
-      this.ui.banner('WORLD RECORD!', 'good', `${fmtTime(ms)} on ${levelMeta(id).name} — the fastest anyone has ever done it!`);
-      this.sound.play('confetti'); this.fx.confetti([this.game && this.game.me ? this.game.me.p[0] : 0, 3, this.game && this.game.me ? this.game.me.p[2] : 0], 80, 9);
-      this.ui.recordsChanged();
+      this.worldRecord(id, ms);
     } catch (e) { if (pb) this.ui.feed(`New personal best: ${fmtTime(ms)}!`, 'good'); }
+  }
+  // with accounts, the server keeps personal bests and decides world records (guests keep their bests here)
+  async onFinishTimeCloud(id, ms) {
+    if (!this.local.signedIn) {
+      if (this.local.personalBest(id, ms)) this.ui.feed(`New personal best: ${fmtTime(ms)}! Sign in to go for the world record.`, 'good');
+      return;
+    }
+    try {
+      const r = await this.local.record(id, ms);
+      if (r.record) { await this.loadRecords(); this.worldRecord(id, ms); }
+      else if (r.pb) this.ui.feed(`New personal best: ${fmtTime(ms)}!`, 'good');
+    } catch (e) { /* offline: the time just doesn't count */ }
+  }
+  worldRecord(id, ms) {
+    this.ui.banner('WORLD RECORD!', 'good', `${fmtTime(ms)} on ${levelMeta(id).name} — the fastest anyone has ever done it!`);
+    this.sound.play('confetti'); this.fx.confetti([this.game && this.game.me ? this.game.me.p[0] : 0, 3, this.game && this.game.me ? this.game.me.p[2] : 0], 80, 9);
+    this.ui.recordsChanged();
   }
   // A newer build on the website? (Friends must be on the same build to play together, so say so.)
   watchForUpdates() {
@@ -264,10 +289,27 @@ class App {
     this.rankKind = k === 'ranked' ? 'ranked' : 'duel'; settings.rankKind = this.rankKind; saveSettings();
     this.ui.setMode(this.mode, this.onlineOK || this.p2pOK, this.rankKind); this.ui.setStatus(this.idleStatus());
   }
-  leaderboard() { return lbFetch(); }
+  leaderboard() { return cloudOn() ? cloudTop() : lbFetch(); }
+  myLbId() { return cloudOn() ? 'me' : this.local.lbId(); }
+  // ranked play needs an account when the game has a Supabase project (so the leaderboard can be trusted)
+  needsAccount() { return cloudOn() && !this.local.signedIn; }
+  // the account was signed in or out, or the server sent back a fresher copy of it
+  onAccount(p, info = {}) {
+    if (this.backend === this.local) { this.ui.setProfile(this.local.profile); this.refreshBean(); this.ui.rankCard(); }
+    if (MENU_STATES.has(this.state)) this.ui.setStatus(this.idleStatus());
+    if (info.signedIn === true) this.ui.toast(info.created ? (info.imported ? `Welcome, ${p.name}! Your bean is now saved to your account.` : `Welcome, ${p.name}!`) : `Signed in — welcome back, ${p.name}!`, 'good');
+    if (info.settled) this.ui.toast(`Your last ranked match didn’t finish — it counts as a loss (${info.settled.to - info.settled.from} RP).`, 'bad');
+    if (info.signedOut) this.ui.toast('Signed out — you’re playing as a guest on this device.', 'info');
+    if (info.expired) this.ui.toast('Your sign-in ran out — sign in again to keep saving to your account.', 'bad');
+    if (info.deleted) this.ui.toast('Your account has been deleted.', 'info');
+    if (info.result && info.result.rankedCounted === false) this.ui.toast('That ranked match couldn’t be confirmed by the other players, so it didn’t change your rank.', 'info');
+    if (info.resultError) this.ui.toast(info.resultError.message, 'bad');
+    if (info.result || info.resultError) { this.ui.setProfile(this.local.profile); }
+  }
   // Every bean that has played ranked keeps one (anonymous) entry on the global leaderboard: highest rank first.
   // Only republished when something on it changes (name, crowns, rank, colour).
   syncLeaderboard() {
+    if (cloudOn()) return; // the server keeps the leaderboard (supabase/functions/cg-api)
     const p = this.local.profile; if (!p || !this.p2pOK) return;
     const w = p.wins | 0, look = beanLook(p.loadout), c = String(look.css).startsWith('#') ? look.css : '#ff7af6', on = (p.rkPlayed | 0) > 0;
     const tg = tagOf(p.owned), sig = on ? ['v3', p.name, p.rp | 0, w, c, p.level, tg].join('|') : '';

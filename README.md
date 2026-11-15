@@ -39,15 +39,21 @@ Mouse sensitivity, invert Y and chat options are in **Settings**.
 - **World records:** the fastest time ever on each race.
 - **Save codes:** move your bean to another device without an account.
 
-### Online (optional, free, no account)
+### Online (optional, free)
 
-There's no game server. One player's browser **hosts** the show and runs the same rules a server would, and everyone else connects to it directly (WebRTC). Public MQTT brokers are only used to help browsers find each other, and as a slower relay when a direct connection is blocked (strict school or office networks). If the host leaves, the show moves to another player ("Switching hosts…") and carries on.
+There's no game server. One player's browser **hosts** the show and runs the same rules a server would, and everyone else connects to it directly (WebRTC). If the host leaves, the show moves to another player ("Switching hosts…") and carries on.
+
+Players find each other through **Supabase**, on the same secure connection as the website, with public MQTT brokers as a fallback. The brokers also act as a slower relay when two browsers can't connect directly (strict school or office networks).
+
+**Accounts are optional.** Sign in with a 6-digit code sent to your email (no passwords) to keep your bean on any device, play **Ranked** and get on the leaderboards. Your progress is then checked and saved by the server. Without an account, everything except Ranked works and your bean is saved on the device. Setting up the Supabase project is explained in **[SUPABASE_SETUP.md](SUPABASE_SETUP.md)**; until then the game runs as guests-only.
 
 Chat is filtered twice (before sending and on arrival), you can mute anyone, and you can switch to quick-chat only or turn chat off.
 
 ## Privacy
 
-Playing Solo sends nothing anywhere. Your bean, items and progress are kept in your browser. Online, other players in your show see your nickname, your bean and your chat messages. The global leaderboard and world records publish your nickname, bean colour and score. There are no accounts, emails or passwords.
+Playing as a guest, your bean, items and progress are kept in your browser. Online, other players in your show see your nickname, your bean and your chat messages. Open copies of the game report an anonymous random id and what they're doing (menu, online, duel, ranked) for the live player counts.
+
+If you sign in, your email address and your bean's save (name, Cranberries, Crowns, items, stats, rank and best times) are kept in the game's Supabase database. The leaderboard and world records show your nickname, bean colour, rank and times, never your email. There are no passwords, and chat isn't stored. You can delete your account and everything in it from the Account screen at any time.
 
 **Ads:** a small native banner may appear on the main menu and the end-of-show screen, never during a round. It only runs on the github.io site, inside its own frame, and is controlled by `ADS_ON` in `src/ui/ads.js`.
 
@@ -60,11 +66,12 @@ npm test         # the test suites
 npm run build    # static files in dist/
 ```
 
-The game has no runtime dependencies (its WebGL2 renderer, physics, audio and networking are all its own code), so `index.html` and `src/` also run as they are, from any static web server, without a build.
+The game's renderer, physics, audio and networking are all its own code. Its only library is supabase-js, which is only downloaded when Supabase is set up. `index.html` and `src/` also run as they are, from any static web server, without a build (the import map in `index.html` loads supabase-js from a CDN in that case).
 
 - **Hosting:** `.github/workflows/deploy.yml` tests, builds and publishes `dist/` to GitHub Pages on every push to `main` (repository **Settings → Pages → Source: GitHub Actions**).
 - **Builds and multiplayer:** players can only play together on exactly the same build. `npm run build` stamps a fingerprint of the code into `src/sim/config.js` (`BUILD`) and into the `cg-build` tag in `index.html` (see `vite.config.js`). A game that's already open checks the website every few minutes and offers a reload when a newer build is live. `npm run dev` and the unbuilt files use `__BUILD__`, which turns that check off. Change `PROTO` in `src/sim/config.js` when the message format changes.
 - **Promo codes:** `npm run promo-key -- THECODE` prints the fingerprint to add to `PROMOS` in `src/economy/promo.js`. Only fingerprints are stored, so keep the codes themselves out of this public repo.
+- **Accounts, leaderboards and matchmaking (Supabase):** see **[SUPABASE_SETUP.md](SUPABASE_SETUP.md)**. The game only ever holds the publishable key (`src/online/cloud/config.js`). Everything that changes a signed-in player's progress goes through the `cg-api` Edge Function (`supabase/functions/cg-api`), which runs the game's own rules from `src/online/progress.js` (copied in by `npm run build:functions`) and checks results against limits and the other players' ranked bookings. The database (`supabase/migrations/`, joined into `supabase/setup.sql` by `npm run build:sql`) only lets the function write progress. `.github/workflows/deploy-functions.yml` deploys the function on every change to `main`.
 - **Optional server:** the game can also use a dedicated CranGuys server (`RemoteConn` in `src/online/net.js`, `RemoteBackend` in `src/online/api.js`, address in Settings). None is needed. On GitHub Pages it asks the site for one at startup, gets a harmless 404 in the console, and uses peer-to-peer instead.
 - **Test hooks** (set from the browser console): `CG_SHOW = ['wallrush:final']` picks the rounds, `CG.autopilot = true` lets the bot AI drive your bean in Solo, `CG_BROKERS = ['ws://…']` uses your own MQTT broker, and `?addebug` shows why the ad did or didn't load.
 
@@ -81,10 +88,13 @@ src/levels/       the level kit, the registry and every round (each a pure funct
 src/render/       WebGL2 renderer, procedural geometry, bean animation, scenes, cameras
 src/audio/        synthesised sound effects and music
 src/ui/           menus, Locker, Shop, Pass, HUD and results, chat panel, icons, rank badges, ads
-src/online/       peer-to-peer hosting, local and remote connections, the save/economy backends,
-                  names, the chat filter and ranked points
+src/online/       peer-to-peer hosting, local and remote connections, the guest save and its rules
+                  (progress.js), names, the chat filter, ranked points and world-record limits
+src/online/cloud/ Supabase: settings (config.js), email sign-in, the account save, the leaderboard,
+                  records, room list, live counts, and Realtime as a matchmaking "broker"
 src/economy/      the cosmetics catalogue and shop rules, CranPass rewards, promo codes
-tools/            promo-key.mjs
+supabase/         database setup (migrations/, setup.sql) and the cg-api Edge Function
+tools/            promo-key.mjs, build-functions.mjs and build-sql.mjs
 tests/            node:test suites
 ```
 

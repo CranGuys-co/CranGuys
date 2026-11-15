@@ -1,0 +1,54 @@
+# Deploys the cg-api Edge Function (supabase/functions/cg-api) without needing a terminal. Runs when the function
+# changes on main, or by hand from the Actions tab (Deploy Supabase function -> Run workflow).
+#
+# Needs one repository secret: SUPABASE_ACCESS_TOKEN (a personal access token from supabase.com -> Account ->
+# Access Tokens). This is NOT the secret key; the function gets that from Supabase itself.
+# The project is read from SUPABASE_URL in src/online/cloud/config.js, so there's nothing else to set here.
+name: Deploy Supabase function
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'supabase/functions/**'
+      - 'supabase/config.toml'
+      - 'src/online/cloud/config.js'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Find the project in src/online/cloud/config.js
+        id: project
+        run: |
+          ref=$(grep -oE "SUPABASE_URL = 'https://[a-z0-9]+\.supabase\.co'" src/online/cloud/config.js | sed -E "s#.*https://([a-z0-9]+)\.supabase\.co.*#\1#" || true)
+          if [ -z "$ref" ]; then
+            echo "::notice::SUPABASE_URL in src/online/cloud/config.js is empty, so there's no Supabase project to deploy to yet. See SUPABASE_SETUP.md."
+          fi
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+      - name: Check the access token is set
+        if: steps.project.outputs.ref != '' && env.SUPABASE_ACCESS_TOKEN == ''
+        run: |
+          echo "::error::Add a repository secret named SUPABASE_ACCESS_TOKEN (Settings -> Secrets and variables -> Actions). See SUPABASE_SETUP.md."
+          exit 1
+      - uses: actions/setup-node@v4
+        if: steps.project.outputs.ref != ''
+        with:
+          node-version: 22
+          cache: npm
+      - name: Test the function
+        if: steps.project.outputs.ref != ''
+        run: |
+          npm ci
+          node --test tests/cloudApi.test.js
+      - uses: supabase/setup-cli@v1
+        if: steps.project.outputs.ref != ''
+        with:
+          version: latest
+      - name: Deploy cg-api
+        if: steps.project.outputs.ref != ''
+        run: supabase functions deploy cg-api --project-ref "${{ steps.project.outputs.ref }}" --no-verify-jwt --use-api --yes

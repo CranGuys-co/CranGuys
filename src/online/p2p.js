@@ -15,6 +15,9 @@ import { decodeInput } from '../sim/protocol.js';
 import { sanitizeLoadout, tagOf, cleanTag } from '../economy/cosmetics.js';
 import { cleanRanked } from './ranks.js';
 import { safeName } from './chatFilter.js';
+import { REC_MAPS } from './records.js';
+import { cloudOn } from './cloud/config.js';
+import { RealtimeConn } from './cloud/realtime.js';
 const enc = new TextEncoder(), dec = new TextDecoder();
 const P2P = {
   PREFIX: 'cranguys/v3',
@@ -26,12 +29,15 @@ const P2P = {
 };
 if (typeof window !== 'undefined' && window.CG_P2P && typeof window.CG_P2P === 'object') Object.assign(P2P, window.CG_P2P); // tests: slow machines
 // test / power-user override: window.CG_BROKERS = ['ws://…'] or localStorage 'cg.brokers'
-function brokers() {
+// With a Supabase project set up (src/online/cloud/config.js), Supabase Realtime comes first ('supabase:', see
+// src/online/cloud/realtime.js) and the public brokers stay on as a fallback and for relaying.
+function brokers(mqttOnly = false) {
+  let list = P2P.BROKERS;
   try {
     const o = (typeof window !== 'undefined' && window.CG_BROKERS) || JSON.parse(localStorage.getItem('cg.brokers') || 'null');
-    if (Array.isArray(o) && o.length) return o;
+    if (Array.isArray(o) && o.length) list = o;
   } catch {}
-  return P2P.BROKERS;
+  return !mqttOnly && cloudOn() ? ['supabase:', ...list] : list;
 }
 const newCode = () => Array.from({ length: 5 }, () => P2P.CODE_CHARS[Math.floor(Math.random() * P2P.CODE_CHARS.length)]).join('');
 const cleanCode = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 5);
@@ -104,9 +110,9 @@ class MiniMQTT {
 // The host listens on every reachable broker; a client uses the first one that answers. The host always
 // replies through the connection a client's message arrived on, so both ends share a broker.
 class Hub {
-  constructor(all, onMsg) { this.all = all; this.onMsg = onMsg; this.conns = new Set(); this.subs = new Set(); this.closed = false; }
+  constructor(all, onMsg, mqttOnly = false) { this.all = all; this.onMsg = onMsg; this.mqttOnly = mqttOnly; this.conns = new Set(); this.subs = new Set(); this.closed = false; }
   open() {
-    const urls = brokers();
+    const urls = brokers(this.mqttOnly);
     return new Promise((resolve, reject) => {
       let left = urls.length, won = false;
       for (const url of urls) {
@@ -116,7 +122,7 @@ class Hub {
     });
   }
   dial(url) {
-    const c = new MiniMQTT(url, 'cg-' + uid());
+    const c = url === 'supabase:' ? new RealtimeConn(TOPIC.pub) : new MiniMQTT(url, 'cg-' + uid());
     return c.connect(P2P.CONNECT_MS).then(() => {
       if (this.closed || (!this.all && this.conns.size)) { c.close(); throw new Error('unneeded'); }
       c.onmessage = (topic, data) => { if (!this.closed) this.onMsg(topic, data, c); };
@@ -314,7 +320,9 @@ class P2PHost {
   sendTo(e, msg, str) {
     if (!e || e.gone) return;
     const bin = msg instanceof Uint8Array;
-    if (e.peer && e.peer.open) return e.peer.send(bin ? msg : str || JSON.stringify(msg));
+    // messages only need the reliable channel: a new guest's hello can arrive on it a moment before the fast channel
+    // opens, and the welcome back mustn't be dropped (the guest would wait on "Joining…" for ever)
+    if (e.peer && (e.peer.open || (!bin && e.peer.rel && e.peer.rel.readyState === 'open'))) return e.peer.send(bin ? msg : str || JSON.stringify(msg));
     if (e.relay && e.via) this.hub.pub(TOPIC.client(this.code, e.pid), frame(bin ? FR.BIN : FR.JSON, '', bin ? msg : enc.encode(str || JSON.stringify(msg))), e.via);
   }
   // broker traffic addressed to the host
@@ -488,9 +496,17 @@ class P2PClient {
       this.dcT = setTimeout(() => { if (!this.ready) this.useRelay(); }, P2P.DC_MS);
     } else this.useRelay();
   }
-  useRelay() {
+  async useRelay() {
     if (this.closed) return;
     this.relay = true; if (this.peer) { this.peer.close(); this.peer = null; }
+    // relayed game data goes through a public broker, never Supabase Realtime (see src/online/cloud/realtime.js)
+    if (!this.via || this.via.kind === 'realtime') {
+      const t0 = now(); let c = null;
+      while (!this.closed && !(c = [...this.hub.conns].find((x) => x.kind !== 'realtime')) && now() - t0 < P2P.CONNECT_MS) await sleep(200);
+      if (this.closed) return;
+      if (!c) { this.onState('hostlost'); this.shut(); return; } // no direct link and no relay either
+      this.via = c;
+    }
     this.hub.pub(TOPIC.host(this.code), JSON.stringify({ t: 'relay', pid: this.pid }), this.via);
     if (this.ready) this.sendJSON(this.hello()); else this.goLive('relay');
   }
@@ -636,7 +652,7 @@ function findPublicRoom(ms = 2600, kind = '', rp = 0) {
 const LB = (id) => `${P2P.PREFIX}/lb/${id}`;
 const lbClean = (id) => String(id || '').replace(/[^a-z0-9]/g, '').slice(0, 16);
 async function pubRetained(topic, payload) {
-  const hub = new Hub(true, () => {});
+  const hub = new Hub(true, () => {}, true);
   try { await hub.open(); await sleep(1200); hub.pub(topic, payload, null, true); await sleep(500); } // give the other brokers a moment too
   finally { hub.close(); }
 }
@@ -659,7 +675,7 @@ function collect(pre, ms, row) {
       let m; try { m = JSON.parse(dec.decode(data)); } catch { return; }
       const r = row(topic.slice(pre.length), m); if (!r) return;
       const old = rows.get(r.id); if (!old || r.at >= old.at) rows.set(r.id, r);
-    });
+    }, true);
     hub.sub(pre + '+');
     hub.open().then(() => setTimeout(() => { hub.close(); resolve(rows); }, ms)).catch((e) => { hub.close(); reject(e); });
   });
@@ -670,7 +686,6 @@ async function lbFetch(ms = 2600) { return [...(await collect(`${P2P.PREFIX}/lb/
 // One retained message per map at cranguys/v3/rec/<map> = { n: name, t: milliseconds, c: colour, tg, at }.
 // Whoever beats it publishes the new one (after checking the latest record once more). Times faster than a
 // bean could physically manage are ignored.
-const REC_MAPS = { whirlway: 17, hammerhills: 12, trusttiles: 13, slimesurge: 22, jumprope: 14, redlight: 12, crownpeak: 12 }; // min seconds
 const REC = (id) => `${P2P.PREFIX}/rec/${id}`;
 function recRow(id, m) {
   if (!REC_MAPS[id] || !m || m.v !== 1) return null;
@@ -703,7 +718,7 @@ class Presence {
       // once) so their counts are right straight away instead of after the next 15 s heartbeat
       if (isNew && m.m !== 'bye' && !this._hi && this.timer) this._hi = setTimeout(() => { this._hi = null; this.beat(); }, 300 + Math.random() * 2200);
       this.changed();
-    });
+    }, true);
     this.hub.sub(topic);
     try { await this.hub.open(); this.ok = true; } catch (e) { this.ok = false; this.hub.close(); this.hub = null; return; }
     this.beat(); this.timer = setInterval(() => { this.beat(); this.changed(); }, 15000);
