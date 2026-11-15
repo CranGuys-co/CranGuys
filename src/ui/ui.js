@@ -11,6 +11,8 @@ import { cmCycle, cmPhase, CM_COLORS } from '../levels/colormatch.js';
 import { crownAt } from '../levels/crownpeak.js';
 import { PASS_ITEMS, PASS_SHOWN, passReward, passClaimable } from '../economy/pass.js';
 import { Ads } from './ads.js';
+import { cloudOn } from '../online/cloud/config.js';
+import { sendCode } from '../online/cloud/account.js';
 // the OWNER tag shown next to the name of whoever redeemed the owner code
 const OWNER_TAG = '<span class="otag"><i class="fa-solid fa-gem"></i>OWNER</span>';
 const passLevelOf = (id) => +(Object.keys(PASS_ITEMS).find((k) => PASS_ITEMS[k] === id) || 0);
@@ -205,13 +207,14 @@ class UI {
     let rows = [], failed = false;
     try { rows = await this.app.leaderboard(); } catch (e) { failed = true; }
     if (!box.isConnected) return;
-    const me = this.app.local.lbId();
-    // our own entry may not have reached the brokers yet: show it anyway
-    if (played && !rows.some((x) => x.id === me)) { rows.push({ id: me, n: p.name, w: p.wins | 0, rp: p.rp | 0, lv: p.level, c: beanLook(p.loadout).css, tg: tagOf(p.owned), at: Date.now() }); rows.sort((a, c) => c.rp - a.rp || c.w - a.w || a.at - c.at); }
+    const me = this.app.myLbId();
+    // our own entry may not have reached the brokers yet: show it anyway (the server's board is always up to date)
+    if (played && !cloudOn() && !rows.some((x) => x.id === me)) { rows.push({ id: me, n: p.name, w: p.wins | 0, rp: p.rp | 0, lv: p.level, c: beanLook(p.loadout).css, tg: tagOf(p.owned), at: Date.now() }); rows.sort((a, c) => c.rp - a.rp || c.w - a.w || a.at - c.at); }
     $('.note', box).textContent = failed ? 'Couldn’t reach the leaderboard — check your connection.' : rows.length ? `${rows.length} bean${rows.length > 1 ? 's' : ''} · names are auto-moderated` : 'Nobody has played ranked yet — be the first!';
     const medal = (i) => (i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : '#' + (i + 1));
     $('#glb', box).innerHTML = rows.map((x, i) => `<div class="${x.id === me ? 'me' : ''}${i < 3 ? ' top' : ''}"><b>${medal(i)}</b><span>${rankBadge(x.rp, 24)}<i class="lbdot" style="background:${esc(x.c)}"></i>${esc(x.n)}${x.tg === 'owner' ? OWNER_TAG : ''}${x.id === me ? ' <em>you</em>' : ''}</span><span class="lbw lbr"><small>${esc(rankOf(x.rp).name)}</small>${fmt(x.rp)} RP</span></div>`).join('');
     const pos = rows.findIndex((x) => x.id === me);
+    if (this.app.needsAccount()) { $('#glbMe', box).innerHTML = '<a href="#" id="glbIn">Sign in</a> and play a ranked match to put your bean on the board!'; $('#glbIn', box).addEventListener('click', (e) => { e.preventDefault(); this.accountModal(); }); return; }
     $('#glbMe', box).innerHTML = played ? (pos >= 0 ? `You’re <b>${medal(pos)}</b> · <b>${esc(rankOf(p.rp | 0).name)}</b> (${fmt(p.rp | 0)} RP)` : `You’re <b>${esc(rankOf(p.rp | 0).name)}</b> — not in the top 100 yet`) : 'Play a ranked match to put your bean on the board!';
     const mine = $('#glb .me', box); if (mine) mine.scrollIntoView({ block: 'nearest' });
   }
@@ -219,7 +222,7 @@ class UI {
     box.innerHTML = `<p class="lb-sub">The fastest time anyone has ever done on each map (races and Crown Peak).</p><p class="note">Loading…</p><div class="lb recs" id="grec"></div>`;
     try { await this.app.loadRecords(); } catch (e) { /* shown below */ }
     if (!box.isConnected) return;
-    const recs = this.app.records, pbs = (this.app.local.load().pbs) || {};
+    const recs = this.app.records, pbs = (this.app.local.profile && this.app.local.profile.pbs) || {};
     $('.note', box).textContent = recs ? 'Beat one in a show to put your name on it!' : 'Couldn’t reach the records — check your connection.';
     $('#grec', box).innerHTML = Object.keys(REC_MAPS).map((id) => {
       const r = recs && recs.get(id), m = levelMeta(id), pb = pbs[id];
@@ -480,15 +483,12 @@ class UI {
   }
   async accountModal() {
     const app = this.app, p = this.profile, online = app.mode === 'online' && app.onlineOK; // logins only exist on a CranGuys server
+    if (cloudOn() && !online) return this.cloudAccountModal();
     let lb = [];
     try { lb = await app.backend.leaderboard(); } catch {}
     const stats = `<div class="seg2"><div class="note"><b>${p.wins}</b> wins</div><div class="note"><b>${p.shows}</b> shows</div><div class="note"><b>${p.finals}</b> finals</div><div class="note">Lv <b>${p.level}</b></div></div>`;
     let acct;
-    if (!online) acct = `<p class="note"><i class="fa-solid fa-circle-check"></i> <b>No sign-in needed!</b> Your bean, Cranberries and items are saved on this device, and Online and Friends games work without an account — other players only see your bean’s name and outfit.</p>
-      <h4><i class="fa-solid fa-link"></i> Move your bean to another device</h4>
-      <p class="note">Copy your save code here, then on the other device open this screen and tap <b>Load save code</b>.</p>
-      <div class="seg2"><button class="btn mint" id="svCopy"><i class="fa-solid fa-copy"></i> Copy save code</button><button class="btn ghost" id="svShow"><i class="fa-solid fa-right-to-bracket"></i> Load save code</button></div>
-      <div id="svBox" class="hide"><textarea class="field" id="svIn" rows="3" placeholder="Paste your save code (starts with CG1-)" autocapitalize="off" autocomplete="off" spellcheck="false"></textarea><button class="btn yellow" id="svLoad" style="width:100%">Load my bean</button></div>`;
+    if (!online) acct = `<p class="note"><i class="fa-solid fa-circle-check"></i> <b>No sign-in needed!</b> Your bean, Cranberries and items are saved on this device, and Online and Friends games work without an account — other players only see your bean’s name and outfit.</p>${this.saveCodeHtml()}`;
     else if (p.guest) acct = `<p class="note">You’re a <b>guest</b>. Create a login to keep your bean on any device.</p>
       <input class="field" id="acU" placeholder="Username" maxlength="16" autocapitalize="off" autocomplete="username"><input class="field" id="acP" type="password" placeholder="Password (6+ characters)" autocomplete="current-password">
       <div class="seg2"><button class="btn mint" id="acReg"><i class="fa-solid fa-user-plus"></i> Create login</button><button class="btn ghost" id="acLog"><i class="fa-solid fa-right-to-bracket"></i> Sign in</button></div>`;
@@ -499,16 +499,73 @@ class UI {
       if ($('#acReg', b)) $('#acReg', b).addEventListener('click', run(() => app.account('register', U(), P())));
       if ($('#acLog', b)) $('#acLog', b).addEventListener('click', run(() => app.account('login', U(), P())));
       if ($('#acOut', b)) $('#acOut', b).addEventListener('click', run(() => app.account('logout')));
-      if ($('#svCopy', b)) $('#svCopy', b).addEventListener('click', () => {
-        const code = app.local.exportCode(), done = () => this.toast('Save code copied! Paste it on your other device.', 'good');
-        const fallback = () => { $('#svBox', b).classList.remove('hide'); $('#svIn', b).value = code; $('#svIn', b).select(); this.toast('Copy the code from the box.'); };
-        try { navigator.clipboard.writeText(code).then(done, fallback); } catch { fallback(); }
-      });
-      if ($('#svShow', b)) $('#svShow', b).addEventListener('click', () => { $('#svBox', b).classList.remove('hide'); $('#svIn', b).value = ''; $('#svIn', b).focus(); });
-      if ($('#svLoad', b)) $('#svLoad', b).addEventListener('click', async () => {
-        try { const p2 = await app.local.importCode($('#svIn', b).value); app.backend = app.local; this.setProfile(p2); app.refreshBean(); this.closeModal(); this.toast(`Welcome back, ${p2.name}!`, 'good'); app.sound.play('buy'); }
-        catch (e) { app.sound.play('error'); this.toast(e.message, 'bad'); }
-      });
+      this.wireSaveCode(b);
+    });
+  }
+
+  // Accounts (Supabase): sign in with a code sent to your email; your bean then lives in your account.
+  cloudAccountModal(step = {}) {
+    const app = this.app, L = app.local, p = this.profile;
+    const stats = `<div class="seg2"><div class="note"><b>${p.wins}</b> wins</div><div class="note"><b>${p.shows}</b> shows</div><div class="note"><b>${p.finals}</b> finals</div><div class="note">Lv <b>${p.level}</b></div></div>`;
+    let acct;
+    if (L.signedIn) acct = `<p class="note"><i class="fa-solid fa-circle-check"></i> Signed in as <b>${esc(L.email)}</b>. Your bean, Cranberries, items and rank are saved to your account — sign in on any device to carry on.</p>
+      <div class="seg2"><button class="btn ghost" id="acOut"><i class="fa-solid fa-right-from-bracket"></i> Sign out</button><button class="btn ghost" id="acDel"><i class="fa-solid fa-trash"></i> Delete account</button></div>`;
+    else if (!step.email) acct = `<p class="note">Sign in with your email to keep your bean on any device, play <b>Ranked</b> and get on the leaderboards. There’s no password: we email you a 6-digit code.</p>
+      <input class="field" id="acEmail" type="email" placeholder="Your email" autocomplete="email" autocapitalize="off" spellcheck="false" inputmode="email" enterkeyhint="send" value="${esc(step.last || '')}">
+      <button class="btn mint" id="acSend" style="width:100%"><i class="fa-solid fa-envelope"></i> Email me a code</button>
+      <p class="note">No account needed to play: without one, your bean is saved on this device.</p>${this.saveCodeHtml()}`;
+    else acct = `<p class="note">We sent a code to <b>${esc(step.email)}</b>. It can take a minute — check your spam folder too.</p>
+      <input class="field" id="acCode" placeholder="6-digit code" inputmode="numeric" autocomplete="one-time-code" maxlength="8" enterkeyhint="go">
+      <label class="note ac-bring"><input type="checkbox" id="acBring" checked> If this is a new account, start it with this device’s bean (Lv ${p.level}, ${fmt(p.berries)} Cranberries)</label>
+      <div class="seg2"><button class="btn mint" id="acVerify"><i class="fa-solid fa-right-to-bracket"></i> Sign in</button><button class="btn ghost" id="acBack">Use another email</button></div>`;
+    this.modal(`<h3><i class="fa-solid fa-user"></i> ${esc(p.name)}</h3>${stats}<h4>Account</h4>${acct}`, (b) => {
+      const busy = (btn, on) => { btn.disabled = on; btn.classList.toggle('busy', on); };
+      const fail = (e) => { app.sound.play('error'); this.toast(e.message || 'Something went wrong — try again.', 'bad'); };
+      const send = $('#acSend', b), verify = $('#acVerify', b);
+      if (send) {
+        const go = async () => {
+          const email = $('#acEmail', b).value; busy(send, true);
+          try { const to = await sendCode(email); app.sound.play('click'); this.cloudAccountModal({ email: to }); setTimeout(() => { const c = $('#acCode'); if (c) c.focus(); }, 50); }
+          catch (e) { busy(send, false); fail(e); }
+        };
+        send.addEventListener('click', go);
+        $('#acEmail', b).addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
+      }
+      if (verify) {
+        const go = async () => {
+          busy(verify, true);
+          try { await L.signIn(step.email, $('#acCode', b).value, { bringSave: $('#acBring', b).checked }); app.sound.play('buy'); this.closeModal(); }
+          catch (e) { busy(verify, false); fail(e); }
+        };
+        verify.addEventListener('click', go);
+        $('#acCode', b).addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
+        $('#acBack', b).addEventListener('click', () => this.cloudAccountModal({ last: step.email }));
+      }
+      if ($('#acOut', b)) $('#acOut', b).addEventListener('click', async () => { await L.signOut(); this.closeModal(); });
+      if ($('#acDel', b)) $('#acDel', b).addEventListener('click', () => this.confirm('Delete your account?', 'This deletes your account and everything saved in it — your bean’s progress, items and rank — for good. The guest bean on this device stays.', 'Delete it', async () => {
+        try { await L.deleteAccount(); } catch (e) { fail(e); }
+      }));
+      this.wireSaveCode(b);
+    });
+  }
+  // guests: move a bean between devices with a code, no account needed
+  saveCodeHtml() {
+    return `<h4><i class="fa-solid fa-link"></i> Move your bean to another device</h4>
+      <p class="note">Copy your save code here, then on the other device open this screen and tap <b>Load save code</b>.</p>
+      <div class="seg2"><button class="btn mint" id="svCopy"><i class="fa-solid fa-copy"></i> Copy save code</button><button class="btn ghost" id="svShow"><i class="fa-solid fa-right-to-bracket"></i> Load save code</button></div>
+      <div id="svBox" class="hide"><textarea class="field" id="svIn" rows="3" placeholder="Paste your save code (starts with CG1-)" autocapitalize="off" autocomplete="off" spellcheck="false"></textarea><button class="btn yellow" id="svLoad" style="width:100%">Load my bean</button></div>`;
+  }
+  wireSaveCode(b) {
+    const app = this.app;
+    if ($('#svCopy', b)) $('#svCopy', b).addEventListener('click', () => {
+      const code = app.local.exportCode(), done = () => this.toast('Save code copied! Paste it on your other device.', 'good');
+      const fallback = () => { $('#svBox', b).classList.remove('hide'); $('#svIn', b).value = code; $('#svIn', b).select(); this.toast('Copy the code from the box.'); };
+      try { navigator.clipboard.writeText(code).then(done, fallback); } catch { fallback(); }
+    });
+    if ($('#svShow', b)) $('#svShow', b).addEventListener('click', () => { $('#svBox', b).classList.remove('hide'); $('#svIn', b).value = ''; $('#svIn', b).focus(); });
+    if ($('#svLoad', b)) $('#svLoad', b).addEventListener('click', async () => {
+      try { const p2 = await app.local.importCode($('#svIn', b).value); app.backend = app.local; this.setProfile(p2); app.refreshBean(); this.closeModal(); this.toast(`Welcome back, ${p2.name}!`, 'good'); app.sound.play('buy'); }
+      catch (e) { app.sound.play('error'); this.toast(e.message, 'bad'); }
     });
   }
 

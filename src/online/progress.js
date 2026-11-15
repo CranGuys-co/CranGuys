@@ -1,0 +1,106 @@
+// CranGuys — the rules for a bean's saved progress: Cranberries, Crowns, XP, items, CranPass, promo codes,
+// personal bests and ranked points. Plain functions on a plain profile object, shared by this device's
+// LocalBackend (src/online/api.js) and the server (supabase/functions/cg-api), so a signed-in account follows
+// exactly the same rules as a guest's save. Functions that change a profile change it in place.
+import { dailyShop, itemById, DEFAULT_OWNED, DEFAULT_LOADOUT, START_BALANCE, sanitizeLoadout, computeRewards, levelForXp, LEVEL_UP_BONUS } from '../economy/cosmetics.js';
+import { beanName } from './names.js';
+import { rankedUpdate, rankedBook, rankedSettle } from './ranks.js';
+import { promoFor, promoKey } from '../economy/promo.js';
+import { passClaimable } from '../economy/pass.js';
+import { cleanName } from './chatFilter.js';
+
+// numbers carried by save codes and the one-time copy into a new account
+const SAVE_FIELDS = ['berries', 'crowns', 'xp', 'wins', 'shows', 'finals', 'rounds', 'rp', 'rpPeak', 'rkPlayed', 'rkWins', 'duelW', 'duelL', 'passClaimed'];
+
+function newProfile(rng = Math.random) {
+  return { id: 'local', name: beanName(rng), username: null, guest: true, ...START_BALANCE, xp: 0, wins: 0, shows: 0, finals: 0, rounds: 0, owned: DEFAULT_OWNED.slice(), loadout: { ...DEFAULT_LOADOUT }, refs: [] };
+}
+// what the game shows (everything but the list of matches already paid out)
+function publicProfile(p) {
+  const { refs, ...rest } = p;
+  return { ...rest, rp: p.rp | 0, level: levelForXp(p.xp), passClaimed: Math.max(1, p.passClaimed | 0), loadout: sanitizeLoadout(p.loadout, new Set(p.owned)) };
+}
+
+function equip(p, lo) {
+  const owned = new Set(p.owned);
+  for (const id of Object.values(lo || {})) if (id && !owned.has(id)) throw new Error('You don’t own that yet');
+  p.loadout = sanitizeLoadout({ ...p.loadout, ...lo }, owned);
+}
+function buy(p, id, shop = dailyShop()) {
+  const it = itemById(id);
+  if (!it || (id !== shop.featured && !shop.items.includes(id))) throw new Error('That item is not in today’s shop');
+  if (p.owned.includes(id)) throw new Error('You already own this');
+  const b = it.price.b || 0, c = it.price.c || 0;
+  if (p.berries < b || p.crowns < c) throw new Error('Not enough ' + (b ? 'Cranberries' : 'Crowns'));
+  p.berries -= b; p.crowns -= c; p.owned.push(id);
+}
+function rename(p, name) { const c = cleanName(name); if (!c.ok) throw new Error(c.msg); p.name = c.name; return c.name; } // auto-moderated
+
+// personal best time on a map (milliseconds); true if this one beat it
+function personalBest(p, id, ms) {
+  const pbs = p.pbs && typeof p.pbs === 'object' ? p.pbs : (p.pbs = {});
+  if (pbs[id] && pbs[id] <= ms) return false;
+  pbs[id] = Math.round(ms); return true;
+}
+// CranPass: claim every level reached since the last claim (see src/economy/pass.js)
+function passClaim(p) {
+  const c = passClaimable(p.xp, p.passClaimed, p.owned);
+  if (!c.levels.length) throw new Error('Nothing to claim yet — play shows to level up!');
+  p.berries += c.berries; p.crowns += c.crowns;
+  for (const id of c.items) if (!p.owned.includes(id)) p.owned.push(id);
+  p.passClaimed = c.to;
+  return c;
+}
+// promo codes (see src/economy/promo.js): unlock items once per save
+function redeem(p, code) {
+  const info = promoFor(code);
+  if (!info) throw new Error('That code doesn’t work — check it and try again.');
+  const key = promoKey(code);
+  p.promos = p.promos || [];
+  const fresh = (info.items || []).filter((id) => itemById(id) && !p.owned.includes(id));
+  if (p.promos.includes(key) && !fresh.length) throw new Error('You’ve already used that code!');
+  for (const id of fresh) p.owned.push(id);
+  if (!p.promos.includes(key)) { p.berries += info.berries | 0; p.crowns += info.crowns | 0; p.promos.push(key); }
+  return info;
+}
+// a finished show (or duel): rewards, stats and ranked points. null if this match was already paid out.
+function reward(p, res) {
+  const ref = 'match:' + res.matchId;
+  p.refs = Array.isArray(p.refs) ? p.refs : [];
+  if (p.refs.includes(ref)) return null;
+  const r = computeRewards(res), l0 = levelForXp(p.xp);
+  p.berries += r.berries; p.crowns += r.crowns; p.xp += r.xp; p.shows++; p.rounds += res.rounds; if (res.won) p.wins++; if (res.rounds >= res.totalRounds - 1) p.finals++;
+  const l1 = levelForXp(p.xp); let levelUp = 0;
+  if (l1 > l0) { levelUp = l1; p.berries += LEVEL_UP_BONUS * (l1 - l0); }
+  if (res.won && !p.owned.includes('h_crown') && p.wins === 1) p.owned.push('h_crown');
+  const rank = res.ranked ? rankedUpdate(p, res.ranked, res.matchId) : null;
+  p.refs.push(ref); if (p.refs.length > 50) p.refs.shift();
+  return { ...r, applied: true, levelUp, bonus: levelUp ? LEVEL_UP_BONUS : 0, rank };
+}
+// a ranked match that started (booked as a loss until its result comes back) / one that never came back
+const rankBook = (p, mid, kind, oppRp) => rankedBook(p, mid, kind, oppRp);
+const rankSettle = (p) => rankedSettle(p);
+// the server couldn't confirm a ranked result (e.g. no opponent ever booked the match): undo the booked loss and
+// count nothing, so a match nobody can vouch for neither costs nor pays
+function rankVoid(p, mid) {
+  const pend = p.rkPending;
+  if (pend && pend.mid === mid) { p.rp = Math.max(0, pend.from | 0); p.rkPending = null; }
+  p.rkLast = String(mid || '').slice(0, 40);
+}
+
+// save codes / account copy: the numbers, items, outfit and name — nothing else
+function saveData(p) {
+  const d = { v: 1, name: p.name, owned: p.owned, loadout: p.loadout };
+  for (const k of SAVE_FIELDS) d[k] = p[k] | 0;
+  return d;
+}
+function loadSaveData(p, d, { rpCap = 1e9, skipItems = [] } = {}) {
+  const owned = new Set([...DEFAULT_OWNED, ...(Array.isArray(d.owned) ? d.owned.filter((id) => itemById(id) && !skipItems.includes(id)) : [])]);
+  for (const k of SAVE_FIELDS) p[k] = Math.max(0, Math.min(1e9, d[k] | 0));
+  p.rp = Math.min(p.rp, rpCap); p.rpPeak = Math.min(p.rpPeak, Math.max(rpCap, p.rp));
+  p.owned = [...owned];
+  p.loadout = sanitizeLoadout({ ...DEFAULT_LOADOUT, ...(d.loadout || {}) }, owned);
+  const n = cleanName(d.name); if (n.ok) p.name = n.name;
+}
+
+export { SAVE_FIELDS, newProfile, publicProfile, equip, buy, rename, personalBest, passClaim, redeem, reward, rankBook, rankSettle, rankVoid, saveData, loadSaveData };

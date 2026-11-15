@@ -10,7 +10,10 @@ import { fileURLToPath } from 'node:url';
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const files = readdirSync(join(ROOT, 'src'), { recursive: true }).filter((f) => f.endsWith('.js')).map((f) => 'src/' + f.split('\\').join('/'));
 const read = (f) => readFileSync(join(ROOT, f), 'utf8');
-const exportsOf = (f) => new Set([...read(f).matchAll(/^export \{([^}]*)\};?$/gm)].flatMap((m) => m[1].split(',').map((s) => s.trim().split(/\s+as\s+/).pop())).filter(Boolean));
+const exportsOf = (f) => new Set([
+  ...[...read(f).matchAll(/^export \{([^}]*)\};?$/gm)].flatMap((m) => m[1].split(',').map((s) => s.trim().split(/\s+as\s+/).pop())),
+  ...[...read(f).matchAll(/^export (?:async )?(?:function\*?|const|let|class) ([A-Za-z_$][\w$]*)/gm)].map((m) => m[1]),
+].filter(Boolean));
 
 test('every import points at a file that exists and exports that name', () => {
   let checked = 0;
