@@ -314,7 +314,9 @@ class P2PHost {
   sendTo(e, msg, str) {
     if (!e || e.gone) return;
     const bin = msg instanceof Uint8Array;
-    if (e.peer && e.peer.open) return e.peer.send(bin ? msg : str || JSON.stringify(msg));
+    // messages only need the reliable channel: a new guest's hello can arrive on it a moment before the fast channel
+    // opens, and the welcome back mustn't be dropped (the guest would wait on "Joining…" for ever)
+    if (e.peer && (e.peer.open || (!bin && e.peer.rel && e.peer.rel.readyState === 'open'))) return e.peer.send(bin ? msg : str || JSON.stringify(msg));
     if (e.relay && e.via) this.hub.pub(TOPIC.client(this.code, e.pid), frame(bin ? FR.BIN : FR.JSON, '', bin ? msg : enc.encode(str || JSON.stringify(msg))), e.via);
   }
   // broker traffic addressed to the host
