@@ -7,7 +7,7 @@
 //
 // While these are empty the game works exactly as before: guests only, progress on this device, and online
 // play through the public brokers.
-export const SUPABASE_URL = 'https://ojyjxspkxteasphfmosr.supabase.co/rest/v1/';              // e.g. 'https://abcdefghijklmnopqrst.supabase.co'
+export const SUPABASE_URL = 'https://ojyjxspkxteasphfmosr.supabase.co';              // e.g. 'https://abcdefghijklmnopqrst.supabase.co'
 export const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_8-LLvyqBTBE2_Nd1x9QTLw_DDaz4szd';  // e.g. 'sb_publishable_…'
 
 // Where the sign-in session is kept in this browser (localStorage key).
@@ -22,7 +22,10 @@ export function supabaseSettings() {
   } catch { o = null; }
   if (o === false || o === 'off') return null;
   const url = (o && o.url) || SUPABASE_URL, key = (o && o.key) || SUPABASE_PUBLISHABLE_KEY;
-  return url && key ? { url: String(url).replace(/\/$/, ''), key: String(key) } : null;
+  if (!url || !key) return null;
+  let base = String(url).trim();
+  try { base = new URL(base).origin; } catch { base = base.replace(/\/+$/, ''); } // just https://<ref>.supabase.co, even if /rest/v1/ was pasted too
+  return { url: base, key: String(key).trim() };
 }
 // Is there a Supabase project to talk to?
 export const cloudOn = () => !!supabaseSettings();

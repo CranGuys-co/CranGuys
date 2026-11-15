@@ -25,7 +25,7 @@ jobs:
       - name: Find the project in src/online/cloud/config.js
         id: project
         run: |
-          ref=$(grep -oE "SUPABASE_URL = 'https://[a-z0-9]+\.supabase\.co'" src/online/cloud/config.js | sed -E "s#.*https://([a-z0-9]+)\.supabase\.co.*#\1#" || true)
+          ref=$(grep -oE "SUPABASE_URL = 'https://[a-z0-9]+\.supabase\.co" src/online/cloud/config.js | sed -E "s#.*https://([a-z0-9]+)\.supabase\.co.*#\1#" || true)
           if [ -z "$ref" ]; then
             echo "::notice::SUPABASE_URL in src/online/cloud/config.js is empty, so there's no Supabase project to deploy to yet. See SUPABASE_SETUP.md."
           fi
