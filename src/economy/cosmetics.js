@@ -1,0 +1,137 @@
+// CranGuys — cosmetics catalog, shop rotation and reward rules. Shared so the server economy, the offline
+// economy and the client UI all agree on prices, rarities and payouts.
+import { mulberry32, hashStr } from '../sim/math.js';
+const RARITY = {
+  common: { name: 'Common', price: { b: 400 }, col: '#5cc8ff' },
+  rare: { name: 'Rare', price: { b: 900 }, col: '#b07bff' },
+  epic: { name: 'Epic', price: { b: 1800 }, col: '#ff5fa2' },
+  legendary: { name: 'Legendary', price: { c: 4 }, col: '#ffc83d' },
+  exclusive: { name: 'Exclusive', price: {}, col: '#14c99a' }, // promo codes only: never in the shop, never on bots
+  pass: { name: 'CranPass', price: {}, col: '#22a8ff' },       // earned on the free CranPass roadmap only
+};
+// rarities you can't buy (and bots never wear)
+const UNBUYABLE = new Set(['exclusive', 'pass']);
+
+const colors = [
+  ['bubblegum', 'Bubblegum', '#ff7ab8', 'common'], ['sky', 'Sky', '#5cc8ff', 'common'], ['lime', 'Lime', '#8fe34d', 'common'],
+  ['sunny', 'Sunny', '#ffd23f', 'common'], ['tangerine', 'Tangerine', '#ff8a3d', 'common'], ['grape', 'Grape', '#8b4dff', 'common'],
+  ['mint', 'Mint', '#40e0a8', 'common'], ['cloud', 'Cloud', '#f4f0ff', 'common'], ['coral', 'Coral', '#ff6f61', 'rare'],
+  ['cranberry', 'Cranberry', '#d6195a', 'rare'], ['teal', 'Teal', '#14b8b0', 'rare'], ['lilac', 'Lilac', '#c9a6ff', 'rare'],
+  ['peach', 'Peach', '#ffb38a', 'rare'], ['ink', 'Ink', '#2b2350', 'epic'], ['cherry', 'Cherry', '#ff2e4d', 'epic'],
+  ['gold', 'Gold', '#ffc83d', 'legendary'], ['rainbow', 'Rainbow', 'rainbow', 'legendary'],
+  // the big colour drop
+  ['seafoam', 'Seafoam', '#7ff0d0', 'common'], ['lavender', 'Lavender', '#b9a6ff', 'common'], ['tomato', 'Tomato', '#ff5a3c', 'common'],
+  ['banana', 'Banana', '#ffe873', 'common'], ['rose', 'Rose', '#ff9eb5', 'common'], ['sand', 'Sand', '#e8c98c', 'common'],
+  ['ocean', 'Ocean', '#1f7ae0', 'rare'], ['plum', 'Plum', '#7a2a7a', 'rare'], ['moss', 'Moss', '#5f8f2f', 'rare'], ['slate', 'Slate', '#5b6b88', 'rare'],
+  ['jade', 'Jade', '#00a86b', 'rare'], ['aqua', 'Aqua', '#3ce3ff', 'rare'], ['chocolate', 'Chocolate', '#7b4a2e', 'rare'],
+  ['charcoal', 'Charcoal', '#3a3a46', 'epic'], ['ruby', 'Ruby', '#c3123d', 'epic'], ['silver', 'Silver', '#c7cfdc', 'epic'], ['bronze', 'Bronze', '#c8823a', 'epic'],
+  // CranPass colours
+  ['neon', 'Neon', '#c6ff1a', 'pass'], ['electric', 'Electric', '#2d6bff', 'pass'], ['magenta', 'Magenta', '#ff1fc8', 'pass'],
+  ['midnight', 'Midnight', '#241a5c', 'pass'], ['glacier', 'Glacier', '#9ff3ff', 'pass'],
+  // promo-code exclusives
+  ['dino', 'Dino Green', '#4fd16a', 'exclusive'],
+];
+const patterns = [
+  ['solid', 'Solid', 0, 'common'], ['stripes', 'Stripes', 1, 'common'], ['polka', 'Polka Dots', 2, 'common'], ['zigzag', 'Zigzag', 3, 'rare'],
+  ['checker', 'Checkers', 4, 'rare'], ['split', 'Half & Half', 5, 'rare'], ['stars', 'Starry', 6, 'epic'], ['swirl', 'Swirl', 7, 'epic'],
+  ['fade', 'Gradient', 8, 'common'], ['hearts', 'Hearts', 9, 'epic'],
+  ['plaid', 'Plaid', 10, 'rare'], ['waves', 'Waves', 11, 'common'], ['leopard', 'Leopard', 12, 'epic'], ['argyle', 'Argyle', 13, 'rare'],
+  ['camo', 'Camo', 14, 'rare'], ['tiedye', 'Tie-Dye', 15, 'epic'],
+];
+const faces = [
+  ['classic', 'Classic', 0, 'common'], ['happy', 'Happy', 1, 'common'], ['sleepy', 'Sleepy', 2, 'rare'], ['shades', 'Cool Shades', 3, 'epic'],
+  ['lovey', 'Lovestruck', 4, 'rare'], ['grumpy', 'Grumpy', 5, 'rare'], ['wink', 'Wink', 6, 'common'], ['starry', 'Starstruck', 7, 'epic'],
+  ['dizzy', 'Dizzy', 8, 'rare'], ['derp', 'Derpy', 9, 'common'], ['sparkle', 'Sparkly', 10, 'epic'], ['cyclops', 'Cyclops', 11, 'rare'],
+];
+const hats = [
+  ['none', 'No Hat', 0, 'common'], ['party', 'Party Cone', 1, 'common'], ['crown', 'Royal Crown', 2, 'legendary'], ['bunny', 'Bunny Ears', 3, 'rare'],
+  ['propeller', 'Propeller Cap', 4, 'rare'], ['halo', 'Halo', 5, 'epic'], ['tophat', 'Top Hat', 6, 'rare'], ['cone', 'Traffic Cone', 7, 'common'],
+  ['viking', 'Viking Horns', 8, 'epic'], ['chef', 'Chef Hat', 9, 'common'], ['leaf', 'Cranberry Sprig', 10, 'epic'], ['antenna', 'Antennae', 11, 'common'],
+  ['flower', 'Daisy', 12, 'rare'], ['beanie', 'Bobble Beanie', 13, 'common'], ['pirate', 'Pirate Hat', 14, 'legendary'], ['headphones', 'Headphones', 15, 'rare'],
+  ['builder', 'Builder’s Hat', 16, 'exclusive'],
+  ['balaclava', 'Pink Balaclava', 17, 'exclusive'], ['dino', 'Dino Hood', 18, 'exclusive'],
+  ['knight', 'Golden Knight Helmet', 19, 'exclusive'], ['bikehelmet', 'White Ski Mask', 20, 'exclusive'] /* id kept from the old bike helmet so redeemers keep it */, ['cape', 'Royal Red Cape', 21, 'exclusive'],
+  ['wings', 'Champion Wings', 22, 'pass'],
+  ['frog', 'Frog Hat', 23, 'exclusive'], ['witch', 'Witch Hat', 24, 'exclusive'], ['sundae', 'Sundae Scoop', 25, 'exclusive'], ['jester', 'Jester Hat', 26, 'exclusive'],
+  ['unicorn', 'Unicorn Horn', 27, 'exclusive'], ['toadstool', 'Toadstool Cap', 28, 'exclusive'], ['pumpkin', 'Pumpkin Head', 29, 'exclusive'],
+  ['gradcap', 'Graduation Cap', 30, 'exclusive'], ['duck', 'Rubber Duck', 31, 'exclusive'], ['ufo', 'Mini UFO', 32, 'exclusive'],
+  // the big hat drop (in the shop)
+  ['beret', 'Beret', 33, 'common'], ['cowboy', 'Cowboy Hat', 34, 'rare'], ['bucket', 'Bucket Hat', 35, 'common'], ['santa', 'Santa Hat', 36, 'rare'],
+  ['antlers', 'Antlers', 37, 'epic'], ['mohawk', 'Punk Mohawk', 38, 'rare'], ['bow', 'Big Bow', 39, 'common'], ['flowercrown', 'Flower Crown', 40, 'epic'],
+  ['catears', 'Cat Ears', 41, 'common'],
+  ['footface', 'Foot Face', 42, 'exclusive'], ['heist', 'Heist Mask', 43, 'exclusive'],
+];
+// hats that wrap round the head or body (they squash and stretch with the bean instead of sitting on top)
+const WRAP_HATS = new Set(['h_balaclava', 'h_dino', 'h_knight', 'h_bikehelmet', 'h_cape', 'h_wings', 'h_pumpkin', 'h_footface', 'h_heist']);
+// name tags: shown next to your name everywhere other players can see it (never in the shop)
+const tags = [['owner', 'Owner Tag', 'exclusive']];
+
+const CATALOG = [];
+for (const [id, name, hex, rarity] of colors) CATALOG.push({ id: 'c_' + id, slot: 'color', name, hex, rarity });
+for (const [id, name, k, rarity] of patterns) CATALOG.push({ id: 'p_' + id, slot: 'pattern', name, k, rarity });
+for (const [id, name, k, rarity] of faces) CATALOG.push({ id: 'f_' + id, slot: 'face', name, k, rarity });
+const BACK_HATS = new Set(['h_cape', 'h_wings']); // worn on the back: their shop / locker picture shows the bean from behind
+for (const [id, name, k, rarity] of hats) CATALOG.push({ id: 'h_' + id, slot: 'hat', name, k, rarity, wrap: WRAP_HATS.has('h_' + id) || undefined, back: BACK_HATS.has('h_' + id) || undefined });
+for (const [id, name, rarity] of tags) CATALOG.push({ id: 't_' + id, slot: 'tag', name, rarity });
+for (const it of CATALOG) it.price = { ...RARITY[it.rarity].price };
+
+const BY_ID = new Map(CATALOG.map((i) => [i.id, i]));
+const itemById = (id) => BY_ID.get(id);
+const SLOTS = ['color', 'color2', 'pattern', 'face', 'hat'];
+const slotCategory = (slot) => (slot === 'color2' ? 'color' : slot);
+// The special tag a player shows next to their name (only 'owner' exists). Checked again by whoever receives it.
+const cleanTag = (t) => (t === 'owner' ? 'owner' : null);
+const tagOf = (owned) => (owned && (Array.isArray(owned) ? owned.includes('t_owner') : owned.has && owned.has('t_owner')) ? 'owner' : null);
+
+const DEFAULT_OWNED = ['c_bubblegum', 'c_sky', 'c_lime', 'c_sunny', 'c_cloud', 'p_solid', 'p_stripes', 'p_fade', 'f_classic', 'f_happy', 'h_none', 'h_party'];
+const DEFAULT_LOADOUT = { color: 'c_bubblegum', color2: 'c_cloud', pattern: 'p_solid', face: 'f_classic', hat: 'h_none' };
+const START_BALANCE = { berries: 1200, crowns: 0 };
+
+// validate & normalise a loadout against an owned set
+function sanitizeLoadout(lo, owned) {
+  const out = { ...DEFAULT_LOADOUT };
+  if (!lo || typeof lo !== 'object') return out;
+  for (const slot of SLOTS) {
+    const id = lo[slot], it = itemById(id);
+    if (it && it.slot === slotCategory(slot) && (!owned || owned.has(id))) out[slot] = id;
+  }
+  return out;
+}
+
+function randomLoadout(rng) {
+  const by = (s) => CATALOG.filter((i) => i.slot === s);
+  const pick = (arr) => arr[Math.floor(rng() * arr.length) % arr.length].id;
+  const hats = by('hat').filter((i) => !UNBUYABLE.has(i.rarity)), cols = by('color').filter((i) => !UNBUYABLE.has(i.rarity));
+  return {
+    color: pick(cols), color2: pick(cols), pattern: pick(by('pattern')), face: pick(by('face')),
+    hat: rng() < 0.45 ? 'h_none' : pick(hats),
+  };
+}
+
+// Daily rotating shop: 6 items + 1 featured legendary, identical for everyone on a given UTC day.
+function dailyShop(date = new Date()) {
+  const day = date.toISOString().slice(0, 10);
+  const rng = mulberry32(hashStr('cranguys-shop-' + day));
+  const pool = CATALOG.filter((i) => !DEFAULT_OWNED.includes(i.id) && i.rarity !== 'legendary' && !UNBUYABLE.has(i.rarity) && i.id !== 'h_none');
+  const legend = CATALOG.filter((i) => i.rarity === 'legendary');
+  const picks = [];
+  while (picks.length < 6) { const it = pool[Math.floor(rng() * pool.length)]; if (!picks.includes(it.id)) picks.push(it.id); }
+  const featured = legend[Math.floor(rng() * legend.length)].id;
+  const next = new Date(day + 'T00:00:00Z'); next.setUTCDate(next.getUTCDate() + 1);
+  return { day, featured, items: picks, refreshAt: next.getTime() };
+}
+
+// Rewards are computed only on the authority (server, or the offline local server).
+function computeRewards({ rounds = 0, won = false, totalRounds = 3, eliminated = false, duel = false, duelWon = false }) {
+  let berries = 40 + rounds * 90, xp = 60 + rounds * 120, crowns = 0;
+  if (rounds >= totalRounds - 1) berries += 60;          // made the final
+  if (won && !duel) { berries += 400; xp += 400; crowns += 1; } // crowns only come from winning a show, never a duel
+  if (duel && duelWon) { berries += 200; xp += 250; }
+  return { berries, crowns, xp };
+}
+const XP_PER_LEVEL = 1000;
+const levelForXp = (xp) => 1 + Math.floor(xp / XP_PER_LEVEL);
+const LEVEL_UP_BONUS = 0; // levels now pay out through the CranPass (src/economy/pass.js)
+
+
+export { RARITY, UNBUYABLE, CATALOG, itemById, SLOTS, slotCategory, cleanTag, tagOf, DEFAULT_OWNED, DEFAULT_LOADOUT, START_BALANCE, sanitizeLoadout, randomLoadout, dailyShop, computeRewards, XP_PER_LEVEL, levelForXp, LEVEL_UP_BONUS };

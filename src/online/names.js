@@ -1,0 +1,14 @@
+// Friendly generated bean names for bots and fresh guest accounts.
+const A = ['Jelly', 'Bouncy', 'Wobbly', 'Sneaky', 'Zippy', 'Sleepy', 'Turbo', 'Fluffy', 'Sparkly', 'Giggly', 'Cosmic', 'Tiny', 'Mega', 'Squishy', 'Spicy', 'Lucky', 'Fizzy', 'Wiggly', 'Silly', 'Speedy', 'Crunchy', 'Dizzy', 'Cran', 'Berry', 'Bubbly', 'Puffy', 'Snazzy', 'Goofy', 'Jazzy', 'Peppy'];
+const N = ['Bean', 'Noodle', 'Muffin', 'Pickle', 'Waffle', 'Sprout', 'Nugget', 'Gumdrop', 'Pudding', 'Taco', 'Biscuit', 'Dumpling', 'Pebble', 'Marshmallow', 'Jellybean', 'Cranberry', 'Bagel', 'Cupcake', 'Meatball', 'Tater', 'Pretzel', 'Sundae', 'Toast', 'Bonbon', 'Gnocchi', 'Popcorn', 'Crumpet', 'Kiwi', 'Lychee', 'Mochi'];
+function beanName(rng) {
+  const a = A[Math.floor(rng() * A.length)], n = N[Math.floor(rng() * N.length)];
+  const style = rng();
+  if (style < 0.4) return a + n + Math.floor(rng() * 99 + 1);
+  if (style < 0.7) return a + '_' + n;
+  if (style < 0.85) return n.toLowerCase() + Math.floor(rng() * 9000 + 1000);
+  return a + n;
+}
+
+
+export { beanName };
