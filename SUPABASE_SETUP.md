@@ -3,7 +3,7 @@
 Supabase gives CranGuys:
 
 - **Accounts.** Players sign in with a 6-digit code sent to their email. There are no passwords.
-- **Cloud saves.** A player's bean, Cranberries, Crowns, items, CranPass and rank follow them to any device. The first sign-in can bring the bean they already have on that device.
+- **Cloud saves.** A player's bean, Cranberries, Crowns, items, CranPass and rank follow them to any device. Their first sign-in always brings the bean they were playing as a guest on that device, with everything it had.
 - **Server-checked progress.** Rewards, the Shop, the Locker, CranPass and promo codes are applied by the server using the game's own rules. A player can't edit their save to give themselves anything.
 - **A leaderboard you can trust.** Ranked points only count when the other players in the match confirm it, and world records need an account. Before, anyone could overwrite any entry on the public servers.
 - **Smoother multiplayer.** Players find and join each other's rooms through Supabase, on the same secure connection as the website. School and office networks that block the old public servers can now find games. The room list for quick play and the live player counts come from the database.
@@ -159,7 +159,7 @@ CranGuys has no game server: every show runs in one player's browser (the host),
 - **Rewards:** each show pays out once, never faster than a show can be played, and at most 250 shows count per account per day.
 - **Shop, Locker, CranPass and promo codes:** the game's own rules decide everything (`src/online/progress.js`).
 - **Ranked:** points only move when the other players booked the same match too. In a duel only one player can win; in a ranked show at least 5 signed-in players must have booked it and only one can take the crown. Each opponent's real rank comes from the server, not from what their game says.
-- **Bringing a guest bean into a new account:** its rank is capped at Gold I (600 RP), and the OWNER tag only ever comes from a promo code redeemed on the server.
+- **Bringing a guest bean into a new account:** everything comes along, including its rank. A guest save lives on the player's own device, so someone who edits theirs could bring in made-up progress; to cap the rank a guest bean can bring, lower `importRpCap` in `LIMITS`. The OWNER tag never comes along: it only ever comes from a promo code redeemed on the server.
 
 Someone who hosts a show and changes the game's code could still fake a result. Use `banned` for them. The limits are in `LIMITS` at the top of `supabase/functions/cg-api/handler.js`.
 

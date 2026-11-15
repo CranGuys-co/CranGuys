@@ -24,7 +24,7 @@ export const LIMITS = {
   gapPerRound: 15,      // …this many for every round the newer one says you played
   perDay: 250,          // show results per account per day (UTC)
   bookMin: 15,          // a ranked match must have been booked this many seconds before its result
-  importRpCap: 600,     // ranked points a guest save brings into a new account (Gold I); the rest is earned online
+  importRpCap: 99999,   // ranked points a guest's bean brings into their new account (99999 = all of it)
   serverOnlyItems: ['t_owner'], // never copied from a device save: only a promo code on the server gives it
 };
 

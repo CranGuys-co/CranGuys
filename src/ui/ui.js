@@ -516,7 +516,7 @@ class UI {
       <p class="note">No account needed to play: without one, your bean is saved on this device.</p>${this.saveCodeHtml()}`;
     else acct = `<p class="note">We sent a code to <b>${esc(step.email)}</b>. It can take a minute — check your spam folder too.</p>
       <input class="field" id="acCode" placeholder="6-digit code" inputmode="numeric" autocomplete="one-time-code" maxlength="8" enterkeyhint="go">
-      <label class="note ac-bring"><input type="checkbox" id="acBring" checked> If this is a new account, start it with this device’s bean (Lv ${p.level}, ${fmt(p.berries)} Cranberries)</label>
+      <p class="note"><i class="fa-solid fa-circle-check"></i> New account? Your bean comes with you: Lv ${p.level}, ${fmt(p.berries)} Cranberries, your items and your rank.</p>
       <div class="seg2"><button class="btn mint" id="acVerify"><i class="fa-solid fa-right-to-bracket"></i> Sign in</button><button class="btn ghost" id="acBack">Use another email</button></div>`;
     this.modal(`<h3><i class="fa-solid fa-user"></i> ${esc(p.name)}</h3>${stats}<h4>Account</h4>${acct}`, (b) => {
       const busy = (btn, on) => { btn.disabled = on; btn.classList.toggle('busy', on); };
@@ -534,7 +534,7 @@ class UI {
       if (verify) {
         const go = async () => {
           busy(verify, true);
-          try { await L.signIn(step.email, $('#acCode', b).value, { bringSave: $('#acBring', b).checked }); app.sound.play('buy'); this.closeModal(); }
+          try { await L.signIn(step.email, $('#acCode', b).value); app.sound.play('buy'); this.closeModal(); }
           catch (e) { busy(verify, false); fail(e); }
         };
         verify.addEventListener('click', go);

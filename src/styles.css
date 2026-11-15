@@ -818,6 +818,4 @@ body.intro-on #duelBoard, body.intro-on #hCounter, body.intro-on #hCrown, body.i
 
 
 /* ---------- accounts (Supabase sign-in, see src/online/cloud) ---------- */
-.ac-bring { display: flex; gap: 10px; align-items: flex-start; cursor: pointer; }
-.ac-bring input { margin: 1px 0 0; width: 18px; height: 18px; flex: none; accent-color: var(--mint); }
 .btn.busy { opacity: .6; pointer-events: none; }

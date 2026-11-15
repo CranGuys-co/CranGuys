@@ -35,7 +35,7 @@ class CloudBackend extends LocalBackend {
     if (ev === 'SIGNED_OUT' && this.user) this.detach({ signedOut: true });
     else if (ev === 'SIGNED_IN' && user && !this.user) { try { await this.attach(user); } catch (e) { this.emit({ error: e }); } }
   }
-  // Load the account (made on its first sign-in, starting from this device's guest save if bringSave).
+  // Load the account. The first sign-in makes it, starting from this device's guest bean (everything it has).
   async attach(user, { bringSave = true } = {}) {
     this.attaching = true;
     try {

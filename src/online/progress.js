@@ -88,9 +88,10 @@ function rankVoid(p, mid) {
   p.rkLast = String(mid || '').slice(0, 40);
 }
 
-// save codes / account copy: the numbers, items, outfit and name — nothing else
+// save codes / a guest's bean going into their new account: the numbers, items, outfit, name, personal bests
+// and the promo codes already used (so a code can't pay out twice)
 function saveData(p) {
-  const d = { v: 1, name: p.name, owned: p.owned, loadout: p.loadout };
+  const d = { v: 1, name: p.name, owned: p.owned, loadout: p.loadout, pbs: p.pbs || {}, promos: p.promos || [] };
   for (const k of SAVE_FIELDS) d[k] = p[k] | 0;
   return d;
 }
@@ -101,6 +102,15 @@ function loadSaveData(p, d, { rpCap = 1e9, skipItems = [] } = {}) {
   p.owned = [...owned];
   p.loadout = sanitizeLoadout({ ...DEFAULT_LOADOUT, ...(d.loadout || {}) }, owned);
   const n = cleanName(d.name); if (n.ok) p.name = n.name;
+  // personal bests: keep the faster of the two for each map
+  if (d.pbs && typeof d.pbs === 'object') {
+    const pbs = p.pbs && typeof p.pbs === 'object' ? p.pbs : (p.pbs = {});
+    for (const [id, ms] of Object.entries(d.pbs).slice(0, 40)) {
+      const t = Math.round(+ms);
+      if (/^[a-z]{1,24}$/.test(id) && t > 0 && t < 3600000 && !(pbs[id] && pbs[id] <= t)) pbs[id] = t;
+    }
+  }
+  if (Array.isArray(d.promos)) p.promos = [...new Set([...(p.promos || []), ...d.promos.filter((k) => typeof k === 'string' && /^[a-z0-9]{1,12}$/.test(k))])].slice(0, 60);
 }
 
 export { SAVE_FIELDS, newProfile, publicProfile, equip, buy, rename, personalBest, passClaim, redeem, reward, rankBook, rankSettle, rankVoid, saveData, loadSaveData };

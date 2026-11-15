@@ -36,15 +36,20 @@ test('no sign-in, no service', async () => {
   assert.equal((await call('u1', { action: 'nope' })).status, 400);
 });
 
-test('first sign-in makes the account, copying the guest save once (rank capped, no OWNER tag)', async () => {
+test('first sign-in makes the account from the guest bean: everything it had (but never the OWNER tag)', async () => {
   const db = fakeDb(), call = api(db);
-  const device = { name: 'Jelly Pal', berries: 5000, crowns: 3, xp: 4200, rp: 2000, rpPeak: 2100, owned: ['h_party', 't_owner', 'not_real'], loadout: { hat: 'h_party' } };
+  const device = { name: 'Jelly Pal', berries: 5000, crowns: 3, xp: 4200, rp: 2000, rpPeak: 2100, wins: 4, owned: ['h_party', 't_owner', 'not_real'], loadout: { hat: 'h_party' }, pbs: { whirlway: 31000, bogus: -5 }, promos: ['o3pqbg'] };
   const a = await call('u1', { action: 'me', device });
   assert.equal(a.status, 200);
   assert.equal(a.created, true);
   assert.equal(a.profile.name, 'Jelly Pal');
   assert.equal(a.profile.berries, 5000);
-  assert.equal(a.profile.rp, LIMITS.importRpCap);
+  assert.equal(a.profile.rp, 2000, 'rank comes along in full');
+  assert.equal(a.profile.rpPeak, 2100);
+  assert.equal(a.profile.wins, 4);
+  assert.equal(a.profile.loadout.hat, 'h_party');
+  assert.deepEqual(a.profile.pbs, { whirlway: 31000 }, 'personal bests come along (junk ones don’t)');
+  assert.deepEqual(a.profile.promos, ['o3pqbg'], 'used promo codes come along, so they can’t pay twice');
   assert.ok(a.profile.owned.includes('h_party'));
   assert.ok(!a.profile.owned.includes('t_owner') && !a.profile.owned.includes('not_real'));
   assert.equal(a.profile.guest, false);
