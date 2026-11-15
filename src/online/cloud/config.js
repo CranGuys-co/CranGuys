@@ -7,8 +7,8 @@
 //
 // While these are empty the game works exactly as before: guests only, progress on this device, and online
 // play through the public brokers.
-export const SUPABASE_URL = '';              // e.g. 'https://abcdefghijklmnopqrst.supabase.co'
-export const SUPABASE_PUBLISHABLE_KEY = '';  // e.g. 'sb_publishable_…'
+export const SUPABASE_URL = 'https://ojyjxspkxteasphfmosr.supabase.co/rest/v1/';              // e.g. 'https://abcdefghijklmnopqrst.supabase.co'
+export const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_8-LLvyqBTBE2_Nd1x9QTLw_DDaz4szd';  // e.g. 'sb_publishable_…'
 
 // Where the sign-in session is kept in this browser (localStorage key).
 export const AUTH_STORAGE_KEY = 'cranguys.auth';
